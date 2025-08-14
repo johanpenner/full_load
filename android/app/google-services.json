@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "1081293548287",
+    "project_id": "johnny-app-93141",
+    "storage_bucket": "johnny-app-93141.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1081293548287:android:c02893f6f67eb806823aca",
+        "android_client_info": {
+          "package_name": "com.example.johnny_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA0aFYnRb8n6YXNVAwwdLlVVKWnKKzYg2c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1081293548287:android:cfcc52698591d1aa823aca",
+        "android_client_info": {
+          "package_name": "com.johnny.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA0aFYnRb8n6YXNVAwwdLlVVKWnKKzYg2c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
