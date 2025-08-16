@@ -17,9 +17,9 @@ dependencies:
 
 
   # File & Document Handling
-  file_picker: ^10.2.4
+  file_picker: ^10.3.1
   path_provider: ^2.1.2
-  path: ^1.9.0
+  path: ^1.9.1
   url_launcher: ^6.3.2
   open_file: ^3.3.2
   archive: ^4.0.7
