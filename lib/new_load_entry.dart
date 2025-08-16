@@ -88,7 +88,8 @@ class _NewLoadEntryPageState extends State<NewLoadEntryPage> {
         child: Form(
           key: _formKey,
           child: Column(children: [
-            const Text('Load Info', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text('Load Info',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             TextFormField(
               decoration: const InputDecoration(labelText: 'Load Number'),
               onChanged: (val) => loadNumber = val,
@@ -153,7 +154,6 @@ class _NewLoadEntryPageState extends State<NewLoadEntryPage> {
                 ),
               ],
             ),
-
             const SizedBox(height: 20),
             CheckboxListTile(
               title: const Text('Multiple Pickup Locations'),
@@ -168,16 +168,16 @@ class _NewLoadEntryPageState extends State<NewLoadEntryPage> {
             ...pickupLocations.map((loc) {
               int i = pickupLocations.indexOf(loc);
               return TextFormField(
-                decoration: InputDecoration(labelText: 'Pickup Address ${i + 1}'),
+                decoration:
+                    InputDecoration(labelText: 'Pickup Address ${i + 1}'),
                 onChanged: (val) => pickupLocations[i] = val,
               );
-            }).toList(),
+            }),
             if (isMultiPickup)
               TextButton(
                 onPressed: () => setState(() => pickupLocations.add('')),
                 child: const Text('Add Pickup'),
               ),
-
             const SizedBox(height: 20),
             CheckboxListTile(
               title: const Text('Multiple Drop Locations'),
@@ -195,13 +195,12 @@ class _NewLoadEntryPageState extends State<NewLoadEntryPage> {
                 decoration: InputDecoration(labelText: 'Drop Address ${i + 1}'),
                 onChanged: (val) => dropLocations[i] = val,
               );
-            }).toList(),
+            }),
             if (isMultiDrop)
               TextButton(
                 onPressed: () => setState(() => dropLocations.add('')),
                 child: const Text('Add Drop'),
               ),
-
             const SizedBox(height: 30),
             ElevatedButton.icon(
               onPressed: () {

@@ -19,7 +19,8 @@ class _DriverTimelineScreenState extends State<DriverTimelineScreen> {
   }
 
   Future<void> reassignDriver(String loadId) async {
-    final employees = await FirebaseFirestore.instance.collection('employees').get();
+    final employees =
+        await FirebaseFirestore.instance.collection('employees').get();
     String? selected;
 
     await showDialog(
@@ -29,7 +30,7 @@ class _DriverTimelineScreenState extends State<DriverTimelineScreen> {
         content: DropdownButtonFormField<String>(
           value: selected,
           items: employees.docs.map((doc) {
-            final data = doc.data() as Map<String, dynamic>;
+            final data = doc.data();
             return DropdownMenuItem(
               value: doc.id,
               child: Text(data['fullName'] ?? ''),
@@ -38,11 +39,16 @@ class _DriverTimelineScreenState extends State<DriverTimelineScreen> {
           onChanged: (val) => selected = val,
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
           ElevatedButton(
             onPressed: () async {
               if (selected != null) {
-                await FirebaseFirestore.instance.collection('loads').doc(loadId).update({
+                await FirebaseFirestore.instance
+                    .collection('loads')
+                    .doc(loadId)
+                    .update({
                   'driverId': selected,
                 });
               }
@@ -66,11 +72,14 @@ class _DriverTimelineScreenState extends State<DriverTimelineScreen> {
             .orderBy('pickupDate')
             .snapshots(),
         builder: (context, snapshot) {
-          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
           final loads = snapshot.data!.docs;
 
           if (loads.isEmpty) {
-            return const Center(child: Text('No assigned loads for this driver.'));
+            return const Center(
+                child: Text('No assigned loads for this driver.'));
           }
 
           return ListView.builder(
@@ -81,7 +90,8 @@ class _DriverTimelineScreenState extends State<DriverTimelineScreen> {
               return Card(
                 margin: const EdgeInsets.all(8),
                 child: ExpansionTile(
-                  title: Text("Load #${data['loadNumber']}", style: const TextStyle(fontWeight: FontWeight.bold)),
+                  title: Text("Load #${data['loadNumber']}",
+                      style: const TextStyle(fontWeight: FontWeight.bold)),
                   subtitle: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -91,13 +101,14 @@ class _DriverTimelineScreenState extends State<DriverTimelineScreen> {
                     ],
                   ),
                   children: [
-                    const Text("Stops:", style: TextStyle(fontWeight: FontWeight.bold)),
+                    const Text("Stops:",
+                        style: TextStyle(fontWeight: FontWeight.bold)),
                     ...List.generate((data['stops'] as List).length, (i) {
                       final stop = data['stops'][i];
                       return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 2),
-                        child: Text("• ${stop['type']} - ${stop['address']}")
-                      );
+                          padding: const EdgeInsets.symmetric(vertical: 2),
+                          child:
+                              Text("• ${stop['type']} - ${stop['address']}"));
                     }),
                     const SizedBox(height: 8),
                     Row(
@@ -112,15 +123,24 @@ class _DriverTimelineScreenState extends State<DriverTimelineScreen> {
                               content: DropdownButtonFormField<String>(
                                 value: data['status'],
                                 items: const [
-                                  DropdownMenuItem(value: 'Planned', child: Text('Planned')),
-                                  DropdownMenuItem(value: 'Assigned', child: Text('Assigned')),
-                                  DropdownMenuItem(value: 'En Route', child: Text('En Route')),
-                                  DropdownMenuItem(value: 'Delivered', child: Text('Delivered')),
+                                  DropdownMenuItem(
+                                      value: 'Planned', child: Text('Planned')),
+                                  DropdownMenuItem(
+                                      value: 'Assigned',
+                                      child: Text('Assigned')),
+                                  DropdownMenuItem(
+                                      value: 'En Route',
+                                      child: Text('En Route')),
+                                  DropdownMenuItem(
+                                      value: 'Delivered',
+                                      child: Text('Delivered')),
                                 ],
                                 onChanged: (val) => updateStatus(doc.id, val!),
                               ),
                               actions: [
-                                TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+                                TextButton(
+                                    onPressed: () => Navigator.pop(context),
+                                    child: const Text('Close')),
                               ],
                             ),
                           ),

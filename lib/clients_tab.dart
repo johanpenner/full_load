@@ -15,27 +15,34 @@ class ClientsTab extends StatefulWidget {
 
 class _ClientsTabState extends State<ClientsTab> {
   // ===== DEV override =====
-  static const bool kDevAllowAllWrites = true; // <- set false to respect Firestore roles
+  static const bool kDevAllowAllWrites =
+      true; // <- set false to respect Firestore roles
 
   final _searchCtrl = TextEditingController();
   String _query = '';
 
   String _role = 'viewer';
-  bool get _canEdit => kDevAllowAllWrites || _role == 'admin' || _role == 'dispatcher';
-  bool get _canDelete => kDevAllowAllWrites || _role == 'admin' || _role == 'dispatcher';
+  bool get _canEdit =>
+      kDevAllowAllWrites || _role == 'admin' || _role == 'dispatcher';
+  bool get _canDelete =>
+      kDevAllowAllWrites || _role == 'admin' || _role == 'dispatcher';
 
   @override
   void initState() {
     super.initState();
     _loadRole();
-    _searchCtrl.addListener(() => setState(() => _query = _searchCtrl.text.trim().toLowerCase()));
+    _searchCtrl.addListener(
+        () => setState(() => _query = _searchCtrl.text.trim().toLowerCase()));
   }
 
   Future<void> _loadRole() async {
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
-      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
       setState(() => _role = (doc.data() ?? const {})['role'] ?? 'viewer');
     } catch (_) {
       setState(() => _role = 'viewer');
@@ -63,7 +70,9 @@ class _ClientsTabState extends State<ClientsTab> {
     if (v is String) return v;
     if (v is num || v is bool) return v.toString();
     if (v is List) return v.map(_asText).where((s) => s.isNotEmpty).join(', ');
-    if (v is Map) return v.values.map(_asText).where((s) => s.isNotEmpty).join(', ');
+    if (v is Map) {
+      return v.values.map(_asText).where((s) => s.isNotEmpty).join(', ');
+    }
     return v.toString();
   }
 
@@ -103,7 +112,10 @@ class _ClientsTabState extends State<ClientsTab> {
             const SizedBox(height: 16),
             Expanded(
               child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: FirebaseFirestore.instance.collection('clients').orderBy('name').snapshots(),
+                stream: FirebaseFirestore.instance
+                    .collection('clients')
+                    .orderBy('name')
+                    .snapshots(),
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const Center(child: CircularProgressIndicator());
@@ -124,7 +136,9 @@ class _ClientsTabState extends State<ClientsTab> {
                               _matches(m['notes']);
                         }).toList();
 
-                  if (filtered.isEmpty) return const Center(child: Text('No clients found.'));
+                  if (filtered.isEmpty) {
+                    return const Center(child: Text('No clients found.'));
+                  }
 
                   return Card(
                     clipBehavior: Clip.antiAlias,
@@ -175,7 +189,8 @@ class _ClientsTabState extends State<ClientsTab> {
     ]);
   }
 
-  Future<void> _confirmDelete(QueryDocumentSnapshot<Map<String, dynamic>> d) async {
+  Future<void> _confirmDelete(
+      QueryDocumentSnapshot<Map<String, dynamic>> d) async {
     final name = _asText(d.data()['name']);
     final ok = await showDialog<bool>(
       context: context,
@@ -183,8 +198,12 @@ class _ClientsTabState extends State<ClientsTab> {
         title: const Text('Delete Client?'),
         content: Text('Delete "$name"? This cannot be undone.'),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Delete')),
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Delete')),
         ],
       ),
     );
@@ -192,18 +211,21 @@ class _ClientsTabState extends State<ClientsTab> {
     try {
       await d.reference.delete();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Client deleted.')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Client deleted.')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
       }
     }
   }
 
-  Future<void> _openAddEditDialog({QueryDocumentSnapshot<Map<String, dynamic>>? doc}) async {
+  Future<void> _openAddEditDialog(
+      {QueryDocumentSnapshot<Map<String, dynamic>>? doc}) async {
     final isEdit = doc != null;
-    final data = isEdit ? (doc!.data()) : <String, dynamic>{};
+    final data = isEdit ? (doc.data()) : <String, dynamic>{};
 
     final name = TextEditingController(text: _asText(data['name']));
     final phone = TextEditingController(text: _asText(data['phone']));
@@ -227,24 +249,40 @@ class _ClientsTabState extends State<ClientsTab> {
                 children: [
                   TextFormField(
                     controller: name,
-                    decoration: const InputDecoration(labelText: 'Client Name *'),
-                    validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+                    decoration:
+                        const InputDecoration(labelText: 'Client Name *'),
+                    validator: (v) =>
+                        (v == null || v.trim().isEmpty) ? 'Required' : null,
                   ),
                   const SizedBox(height: 8),
-                  TextFormField(controller: phone, decoration: const InputDecoration(labelText: 'Phone')),
+                  TextFormField(
+                      controller: phone,
+                      decoration: const InputDecoration(labelText: 'Phone')),
                   const SizedBox(height: 8),
-                  TextFormField(controller: email, decoration: const InputDecoration(labelText: 'Email')),
+                  TextFormField(
+                      controller: email,
+                      decoration: const InputDecoration(labelText: 'Email')),
                   const SizedBox(height: 8),
-                  TextFormField(controller: address, decoration: const InputDecoration(labelText: 'Address'), minLines: 1, maxLines: 3),
+                  TextFormField(
+                      controller: address,
+                      decoration: const InputDecoration(labelText: 'Address'),
+                      minLines: 1,
+                      maxLines: 3),
                   const SizedBox(height: 8),
-                  TextFormField(controller: notes, decoration: const InputDecoration(labelText: 'Notes'), minLines: 1, maxLines: 5),
+                  TextFormField(
+                      controller: notes,
+                      decoration: const InputDecoration(labelText: 'Notes'),
+                      minLines: 1,
+                      maxLines: 5),
                 ],
               ),
             ),
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel')),
           ElevatedButton.icon(
             onPressed: () async {
               if (!formKey.currentState!.validate()) return;
@@ -266,9 +304,10 @@ class _ClientsTabState extends State<ClientsTab> {
 
               try {
                 if (isEdit) {
-                  await doc!.reference.update(payload);
+                  await doc.reference.update(payload);
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Client updated.')));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Client updated.')));
                   }
                 } else {
                   await FirebaseFirestore.instance.collection('clients').add({
@@ -277,12 +316,14 @@ class _ClientsTabState extends State<ClientsTab> {
                     'createdByUid': user?.uid,
                   });
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Client added.')));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Client added.')));
                   }
                 }
               } catch (e) {
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to save: $e')));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Failed to save: $e')));
                 }
               }
             },

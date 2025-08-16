@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
@@ -130,7 +129,9 @@ class _EditDocumentsScreenState extends State<EditDocumentsScreen> {
 
   Widget _buildPreviewIcon(String url) {
     final lower = url.toLowerCase();
-    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.png')) {
+    if (lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.png')) {
       return Image.network(url, width: 50, height: 50, fit: BoxFit.cover);
     } else if (lower.endsWith('.pdf')) {
       return const Icon(Icons.picture_as_pdf, size: 40, color: Colors.red);
@@ -142,11 +143,14 @@ class _EditDocumentsScreenState extends State<EditDocumentsScreen> {
   Widget _buildFilePreview(String tag, File file) {
     final lower = file.path.toLowerCase();
     return ListTile(
-      leading: lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.png')
+      leading: lower.endsWith('.jpg') ||
+              lower.endsWith('.jpeg') ||
+              lower.endsWith('.png')
           ? Image.file(file, width: 50, height: 50, fit: BoxFit.cover)
           : lower.endsWith('.pdf')
               ? const Icon(Icons.picture_as_pdf, size: 40, color: Colors.red)
-              : const Icon(Icons.insert_drive_file, size: 40, color: Colors.blue),
+              : const Icon(Icons.insert_drive_file,
+                  size: 40, color: Colors.blue),
       title: Text(tag),
       trailing: IconButton(
         icon: const Icon(Icons.delete),
@@ -170,7 +174,8 @@ class _EditDocumentsScreenState extends State<EditDocumentsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Text("Existing Documents", style: TextStyle(fontWeight: FontWeight.bold)),
+          const Text("Existing Documents",
+              style: TextStyle(fontWeight: FontWeight.bold)),
           const SizedBox(height: 10),
           ...documentMap.entries.map((entry) {
             final docData = entry.value;
@@ -188,7 +193,8 @@ class _EditDocumentsScreenState extends State<EditDocumentsScreen> {
                     Text(url, maxLines: 1, overflow: TextOverflow.ellipsis),
                     if (uploader != null || uploadedAt != null)
                       Text("Uploaded by: $uploader\nAt: $uploadedAt",
-                          style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                          style: const TextStyle(
+                              fontSize: 11, color: Colors.grey)),
                   ],
                 ),
                 trailing: IconButton(
@@ -199,7 +205,8 @@ class _EditDocumentsScreenState extends State<EditDocumentsScreen> {
             );
           }),
           const Divider(height: 40),
-          const Text("Upload New Documents", style: TextStyle(fontWeight: FontWeight.bold)),
+          const Text("Upload New Documents",
+              style: TextStyle(fontWeight: FontWeight.bold)),
           const SizedBox(height: 10),
           ElevatedButton.icon(
             icon: const Icon(Icons.upload_file),
@@ -207,7 +214,8 @@ class _EditDocumentsScreenState extends State<EditDocumentsScreen> {
             onPressed: pickFiles,
           ),
           const SizedBox(height: 10),
-          ...selectedFiles.entries.map((e) => _buildFilePreview(e.key, e.value)),
+          ...selectedFiles.entries
+              .map((e) => _buildFilePreview(e.key, e.value)),
           if (isUploading)
             Column(
               children: [

@@ -20,21 +20,27 @@ class _ReceiversTabState extends State<ReceiversTab> {
   String _query = '';
 
   String _role = 'viewer';
-  bool get _canEdit => kDevAllowAllWrites || _role == 'admin' || _role == 'dispatcher';
-  bool get _canDelete => kDevAllowAllWrites || _role == 'admin' || _role == 'dispatcher';
+  bool get _canEdit =>
+      kDevAllowAllWrites || _role == 'admin' || _role == 'dispatcher';
+  bool get _canDelete =>
+      kDevAllowAllWrites || _role == 'admin' || _role == 'dispatcher';
 
   @override
   void initState() {
     super.initState();
     _loadRole();
-    _searchCtrl.addListener(() => setState(() => _query = _searchCtrl.text.trim().toLowerCase()));
+    _searchCtrl.addListener(
+        () => setState(() => _query = _searchCtrl.text.trim().toLowerCase()));
   }
 
   Future<void> _loadRole() async {
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
-      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
       setState(() => _role = (doc.data() ?? const {})['role'] ?? 'viewer');
     } catch (_) {
       setState(() => _role = 'viewer');
@@ -55,7 +61,8 @@ class _ReceiversTabState extends State<ReceiversTab> {
     });
   }
 
-  String _oneLine(String s) => s.replaceAll('\n', ', ').replaceAll(RegExp(r'\s+'), ' ').trim();
+  String _oneLine(String s) =>
+      s.replaceAll('\n', ', ').replaceAll(RegExp(r'\s+'), ' ').trim();
   bool _matches(String? s) => (s ?? '').toLowerCase().contains(_query);
 
   @override
@@ -114,7 +121,9 @@ class _ReceiversTabState extends State<ReceiversTab> {
                               _matches(m['mainEmail']);
                         }).toList();
 
-                  if (filtered.isEmpty) return const Center(child: Text('No receivers found.'));
+                  if (filtered.isEmpty) {
+                    return const Center(child: Text('No receivers found.'));
+                  }
 
                   return ListView.builder(
                     itemCount: filtered.length,
@@ -177,11 +186,15 @@ class _ReceiversTabState extends State<ReceiversTab> {
     );
   }
 
-  Widget _locationCard({required String receiverId, required int index, required Map<String, dynamic> location}) {
+  Widget _locationCard(
+      {required String receiverId,
+      required int index,
+      required Map<String, dynamic> location}) {
     final locName = (location['locationName'] ?? '') as String;
     final address = (location['address'] ?? '') as String;
     final type = (location['type'] ?? 'pickup') as String;
-    final contacts = List<Map<String, dynamic>>.from(location['contacts'] ?? []);
+    final contacts =
+        List<Map<String, dynamic>>.from(location['contacts'] ?? []);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -199,12 +212,15 @@ class _ReceiversTabState extends State<ReceiversTab> {
                 IconButton(
                   tooltip: _canEdit ? 'Edit location' : 'View',
                   icon: const Icon(Icons.edit_location_alt_outlined),
-                  onPressed: () => _openAddEditLocationDialog(receiverId, index: index),
+                  onPressed: () =>
+                      _openAddEditLocationDialog(receiverId, index: index),
                 ),
                 IconButton(
                   tooltip: _canDelete ? 'Delete location' : 'No permission',
                   icon: const Icon(Icons.delete_outline),
-                  onPressed: _canDelete ? () => _confirmDeleteLocation(receiverId, index) : null,
+                  onPressed: _canDelete
+                      ? () => _confirmDeleteLocation(receiverId, index)
+                      : null,
                 ),
               ],
             ),
@@ -214,19 +230,24 @@ class _ReceiversTabState extends State<ReceiversTab> {
               contentPadding: const EdgeInsets.only(left: 0, right: 0),
               leading: const Icon(Icons.person_outline),
               title: Text((contacts[c]['name'] ?? '') as String),
-              subtitle: Text(_oneLine('${contacts[c]['position'] ?? ''} • ${contacts[c]['phone'] ?? ''} ext ${contacts[c]['ext'] ?? ''}')),
+              subtitle: Text(_oneLine(
+                  '${contacts[c]['position'] ?? ''} • ${contacts[c]['phone'] ?? ''} ext ${contacts[c]['ext'] ?? ''}')),
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   IconButton(
                     tooltip: _canEdit ? 'Edit contact' : 'View',
                     icon: const Icon(Icons.edit),
-                    onPressed: () => _openAddEditContactDialog(receiverId, index, contactIndex: c),
+                    onPressed: () => _openAddEditContactDialog(
+                        receiverId, index,
+                        contactIndex: c),
                   ),
                   IconButton(
                     tooltip: _canDelete ? 'Delete contact' : 'No permission',
                     icon: const Icon(Icons.delete_outline),
-                    onPressed: _canDelete ? () => _confirmDeleteContact(receiverId, index, c) : null,
+                    onPressed: _canDelete
+                        ? () => _confirmDeleteContact(receiverId, index, c)
+                        : null,
                   ),
                 ],
               ),
@@ -247,9 +268,10 @@ class _ReceiversTabState extends State<ReceiversTab> {
   }
 
   // ---------- Receiver ----------
-  Future<void> _openAddEditReceiverDialog({QueryDocumentSnapshot<Map<String, dynamic>>? doc}) async {
+  Future<void> _openAddEditReceiverDialog(
+      {QueryDocumentSnapshot<Map<String, dynamic>>? doc}) async {
     final isEdit = doc != null;
-    final data = isEdit ? (doc!.data()) : <String, dynamic>{};
+    final data = isEdit ? (doc.data()) : <String, dynamic>{};
 
     final name = TextEditingController(text: data['name'] ?? '');
     final mainAddress = TextEditingController(text: data['mainAddress'] ?? '');
@@ -273,24 +295,39 @@ class _ReceiversTabState extends State<ReceiversTab> {
                 children: [
                   TextFormField(
                     controller: name,
-                    decoration: const InputDecoration(labelText: 'Company Name *'),
-                    validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+                    decoration:
+                        const InputDecoration(labelText: 'Company Name *'),
+                    validator: (v) =>
+                        (v == null || v.trim().isEmpty) ? 'Required' : null,
                   ),
                   const SizedBox(height: 8),
-                  TextFormField(controller: mainAddress, decoration: const InputDecoration(labelText: 'Main Address')),
+                  TextFormField(
+                      controller: mainAddress,
+                      decoration:
+                          const InputDecoration(labelText: 'Main Address')),
                   const SizedBox(height: 8),
-                  TextFormField(controller: mainPhone, decoration: const InputDecoration(labelText: 'Office Phone')),
+                  TextFormField(
+                      controller: mainPhone,
+                      decoration:
+                          const InputDecoration(labelText: 'Office Phone')),
                   const SizedBox(height: 8),
-                  TextFormField(controller: mainMobile, decoration: const InputDecoration(labelText: 'Mobile Phone')),
+                  TextFormField(
+                      controller: mainMobile,
+                      decoration:
+                          const InputDecoration(labelText: 'Mobile Phone')),
                   const SizedBox(height: 8),
-                  TextFormField(controller: mainEmail, decoration: const InputDecoration(labelText: 'Email')),
+                  TextFormField(
+                      controller: mainEmail,
+                      decoration: const InputDecoration(labelText: 'Email')),
                 ],
               ),
             ),
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel')),
           if (_canEdit)
             ElevatedButton.icon(
               onPressed: () async {
@@ -310,12 +347,15 @@ class _ReceiversTabState extends State<ReceiversTab> {
 
                 try {
                   if (isEdit) {
-                    await doc!.reference.update(payload);
+                    await doc.reference.update(payload);
                     if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Receiver updated.')));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Receiver updated.')));
                     }
                   } else {
-                    await FirebaseFirestore.instance.collection('receivers').add({
+                    await FirebaseFirestore.instance
+                        .collection('receivers')
+                        .add({
                       ...payload,
                       'locations': [],
                       'notes': [],
@@ -324,12 +364,14 @@ class _ReceiversTabState extends State<ReceiversTab> {
                       'createdAt': FieldValue.serverTimestamp(),
                     });
                     if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Receiver added.')));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Receiver added.')));
                     }
                   }
                 } catch (e) {
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to save: $e')));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Failed to save: $e')));
                   }
                 }
               },
@@ -347,17 +389,23 @@ class _ReceiversTabState extends State<ReceiversTab> {
     mainEmail.dispose();
   }
 
-  Future<void> _confirmDeleteReceiver(QueryDocumentSnapshot<Map<String, dynamic>> d) async {
+  Future<void> _confirmDeleteReceiver(
+      QueryDocumentSnapshot<Map<String, dynamic>> d) async {
     final m = d.data();
     final name = (m['name'] ?? '') as String;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete Receiver?'),
-        content: Text('Delete "$name" and all locations/contacts? This cannot be undone.'),
+        content: Text(
+            'Delete "$name" and all locations/contacts? This cannot be undone.'),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Delete')),
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Delete')),
         ],
       ),
     );
@@ -366,24 +414,28 @@ class _ReceiversTabState extends State<ReceiversTab> {
     try {
       await d.reference.delete();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Receiver deleted.')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Receiver deleted.')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
       }
     }
   }
 
   // ---------- Location ----------
-  Future<void> _openAddEditLocationDialog(String receiverId, {int? index}) async {
+  Future<void> _openAddEditLocationDialog(String receiverId,
+      {int? index}) async {
     final isEdit = index != null;
-    final docRef = FirebaseFirestore.instance.collection('receivers').doc(receiverId);
+    final docRef =
+        FirebaseFirestore.instance.collection('receivers').doc(receiverId);
     final snap = await docRef.get();
     final data = (snap.data() ?? <String, dynamic>{});
     final locations = List<Map<String, dynamic>>.from(data['locations'] ?? []);
 
-    final existing = isEdit ? locations[index!] : <String, dynamic>{};
+    final existing = isEdit ? locations[index] : <String, dynamic>{};
 
     final locName = TextEditingController(text: existing['locationName'] ?? '');
     final address = TextEditingController(text: existing['address'] ?? '');
@@ -398,9 +450,14 @@ class _ReceiversTabState extends State<ReceiversTab> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(controller: locName, decoration: const InputDecoration(labelText: 'Location Name')),
+              TextField(
+                  controller: locName,
+                  decoration:
+                      const InputDecoration(labelText: 'Location Name')),
               const SizedBox(height: 8),
-              TextField(controller: address, decoration: const InputDecoration(labelText: 'Address')),
+              TextField(
+                  controller: address,
+                  decoration: const InputDecoration(labelText: 'Address')),
               const SizedBox(height: 8),
               DropdownButtonFormField<String>(
                 value: type,
@@ -416,7 +473,9 @@ class _ReceiversTabState extends State<ReceiversTab> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel')),
           if (_canEdit)
             ElevatedButton.icon(
               onPressed: () async {
@@ -424,26 +483,34 @@ class _ReceiversTabState extends State<ReceiversTab> {
                   'locationName': locName.text.trim(),
                   'address': address.text.trim(),
                   'type': type,
-                  'contacts': List<Map<String, dynamic>>.from(existing['contacts'] ?? []),
+                  'contacts': List<Map<String, dynamic>>.from(
+                      existing['contacts'] ?? []),
                 };
 
                 _closeDialogNextFrame();
 
                 try {
                   if (isEdit) {
-                    locations[index!] = payload;
+                    locations[index] = payload;
                   } else {
                     locations.add(payload);
                   }
-                  await docRef.update({'locations': locations, 'updatedAt': FieldValue.serverTimestamp()});
+                  await docRef.update({
+                    'locations': locations,
+                    'updatedAt': FieldValue.serverTimestamp()
+                  });
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(isEdit ? 'Location updated.' : 'Location added.')),
+                      SnackBar(
+                          content: Text(isEdit
+                              ? 'Location updated.'
+                              : 'Location added.')),
                     );
                   }
                 } catch (e) {
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to save: $e')));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Failed to save: $e')));
                   }
                 }
               },
@@ -465,42 +532,56 @@ class _ReceiversTabState extends State<ReceiversTab> {
         title: const Text('Delete Location?'),
         content: const Text('Remove this location and its contacts?'),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Delete')),
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Delete')),
         ],
       ),
     );
     if (ok != true) return;
 
     try {
-      final docRef = FirebaseFirestore.instance.collection('receivers').doc(receiverId);
+      final docRef =
+          FirebaseFirestore.instance.collection('receivers').doc(receiverId);
       final snap = await docRef.get();
       final data = (snap.data() ?? <String, dynamic>{});
-      final locations = List<Map<String, dynamic>>.from(data['locations'] ?? []);
+      final locations =
+          List<Map<String, dynamic>>.from(data['locations'] ?? []);
       if (index >= 0 && index < locations.length) {
         locations.removeAt(index);
-        await docRef.update({'locations': locations, 'updatedAt': FieldValue.serverTimestamp()});
+        await docRef.update({
+          'locations': locations,
+          'updatedAt': FieldValue.serverTimestamp()
+        });
       }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Location deleted.')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Location deleted.')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
       }
     }
   }
 
   // ---------- Contact ----------
-  Future<void> _openAddEditContactDialog(String receiverId, int locationIndex, {int? contactIndex}) async {
+  Future<void> _openAddEditContactDialog(String receiverId, int locationIndex,
+      {int? contactIndex}) async {
     final isEdit = contactIndex != null;
-    final docRef = FirebaseFirestore.instance.collection('receivers').doc(receiverId);
+    final docRef =
+        FirebaseFirestore.instance.collection('receivers').doc(receiverId);
     final snap = await docRef.get();
     final data = (snap.data() ?? <String, dynamic>{});
     final locations = List<Map<String, dynamic>>.from(data['locations'] ?? []);
-    final contacts = List<Map<String, dynamic>>.from(locations[locationIndex]['contacts'] ?? []);
+    final contacts = List<Map<String, dynamic>>.from(
+        locations[locationIndex]['contacts'] ?? []);
 
-    final existing = isEdit ? contacts[contactIndex!] : <String, dynamic>{};
+    final existing = isEdit ? contacts[contactIndex] : <String, dynamic>{};
 
     final name = TextEditingController(text: existing['name'] ?? '');
     final position = TextEditingController(text: existing['position'] ?? '');
@@ -517,20 +598,32 @@ class _ReceiversTabState extends State<ReceiversTab> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(controller: name, decoration: const InputDecoration(labelText: 'Name')),
+              TextField(
+                  controller: name,
+                  decoration: const InputDecoration(labelText: 'Name')),
               const SizedBox(height: 8),
-              TextField(controller: position, decoration: const InputDecoration(labelText: 'Position')),
+              TextField(
+                  controller: position,
+                  decoration: const InputDecoration(labelText: 'Position')),
               const SizedBox(height: 8),
-              TextField(controller: phone, decoration: const InputDecoration(labelText: 'Phone')),
+              TextField(
+                  controller: phone,
+                  decoration: const InputDecoration(labelText: 'Phone')),
               const SizedBox(height: 8),
-              TextField(controller: email, decoration: const InputDecoration(labelText: 'Email')),
+              TextField(
+                  controller: email,
+                  decoration: const InputDecoration(labelText: 'Email')),
               const SizedBox(height: 8),
-              TextField(controller: ext, decoration: const InputDecoration(labelText: 'Ext')),
+              TextField(
+                  controller: ext,
+                  decoration: const InputDecoration(labelText: 'Ext')),
             ],
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel')),
           if (_canEdit)
             ElevatedButton.icon(
               onPressed: () async {
@@ -546,20 +639,26 @@ class _ReceiversTabState extends State<ReceiversTab> {
 
                 try {
                   if (isEdit) {
-                    contacts[contactIndex!] = payload;
+                    contacts[contactIndex] = payload;
                   } else {
                     contacts.add(payload);
                   }
                   locations[locationIndex]['contacts'] = contacts;
-                  await docRef.update({'locations': locations, 'updatedAt': FieldValue.serverTimestamp()});
+                  await docRef.update({
+                    'locations': locations,
+                    'updatedAt': FieldValue.serverTimestamp()
+                  });
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(isEdit ? 'Contact updated.' : 'Contact added.')),
+                      SnackBar(
+                          content: Text(
+                              isEdit ? 'Contact updated.' : 'Contact added.')),
                     );
                   }
                 } catch (e) {
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to save: $e')));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Failed to save: $e')));
                   }
                 }
               },
@@ -577,37 +676,50 @@ class _ReceiversTabState extends State<ReceiversTab> {
     ext.dispose();
   }
 
-  Future<void> _confirmDeleteContact(String receiverId, int locationIndex, int contactIndex) async {
+  Future<void> _confirmDeleteContact(
+      String receiverId, int locationIndex, int contactIndex) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete Contact?'),
         content: const Text('Remove this contact from the location?'),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Delete')),
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Delete')),
         ],
       ),
     );
     if (ok != true) return;
 
     try {
-      final docRef = FirebaseFirestore.instance.collection('receivers').doc(receiverId);
+      final docRef =
+          FirebaseFirestore.instance.collection('receivers').doc(receiverId);
       final snap = await docRef.get();
       final data = (snap.data() ?? <String, dynamic>{});
-      final locations = List<Map<String, dynamic>>.from(data['locations'] ?? []);
-      final contacts = List<Map<String, dynamic>>.from(locations[locationIndex]['contacts'] ?? []);
+      final locations =
+          List<Map<String, dynamic>>.from(data['locations'] ?? []);
+      final contacts = List<Map<String, dynamic>>.from(
+          locations[locationIndex]['contacts'] ?? []);
       if (contactIndex >= 0 && contactIndex < contacts.length) {
         contacts.removeAt(contactIndex);
         locations[locationIndex]['contacts'] = contacts;
-        await docRef.update({'locations': locations, 'updatedAt': FieldValue.serverTimestamp()});
+        await docRef.update({
+          'locations': locations,
+          'updatedAt': FieldValue.serverTimestamp()
+        });
       }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Contact deleted.')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Contact deleted.')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
       }
     }
   }

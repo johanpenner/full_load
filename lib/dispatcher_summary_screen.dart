@@ -1,10 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:intl/intl.dart';
 import 'package:csv/csv.dart';
-import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -13,7 +10,8 @@ class DispatcherSummaryScreen extends StatefulWidget {
   const DispatcherSummaryScreen({super.key});
 
   @override
-  State<DispatcherSummaryScreen> createState() => _DispatcherSummaryScreenState();
+  State<DispatcherSummaryScreen> createState() =>
+      _DispatcherSummaryScreenState();
 }
 
 class _DispatcherSummaryScreenState extends State<DispatcherSummaryScreen> {
@@ -53,7 +51,8 @@ class _DispatcherSummaryScreenState extends State<DispatcherSummaryScreen> {
 
     final csv = const ListToCsvConverter().convert(rows);
     final dir = await getApplicationDocumentsDirectory();
-    final path = '${dir.path}/dispatcher_export_${DateTime.now().millisecondsSinceEpoch}.csv';
+    final path =
+        '${dir.path}/dispatcher_export_${DateTime.now().millisecondsSinceEpoch}.csv';
     final file = File(path);
     await file.writeAsString(csv);
     Share.shareXFiles([XFile(file.path)], text: 'Dispatcher Summary CSV');
@@ -90,7 +89,8 @@ class _DispatcherSummaryScreenState extends State<DispatcherSummaryScreen> {
     );
 
     final dir = await getApplicationDocumentsDirectory();
-    final path = '${dir.path}/dispatcher_export_${DateTime.now().millisecondsSinceEpoch}.pdf';
+    final path =
+        '${dir.path}/dispatcher_export_${DateTime.now().millisecondsSinceEpoch}.pdf';
     final file = File(path);
     await file.writeAsBytes(await pdf.save());
     Share.shareXFiles([XFile(file.path)], text: 'Dispatcher Summary PDF');

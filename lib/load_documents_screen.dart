@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
-import 'package:path/path.dart' as path;
 import 'package:share_plus/share_plus.dart';
 import 'package:archive/archive_io.dart';
 import 'package:path_provider/path_provider.dart';
@@ -24,7 +23,8 @@ class _LoadDocumentsScreenState extends State<LoadDocumentsScreen> {
     if (result != null) {
       final files = result.paths.whereType<String>().toList();
 
-      final docRef = FirebaseFirestore.instance.collection('loads').doc(selectedLoadId);
+      final docRef =
+          FirebaseFirestore.instance.collection('loads').doc(selectedLoadId);
       final snap = await docRef.get();
       final data = snap.data()!;
       final existing = Map<String, dynamic>.from(data['documents'] ?? {});
@@ -33,14 +33,16 @@ class _LoadDocumentsScreenState extends State<LoadDocumentsScreen> {
       existing[category] = updatedList;
 
       await docRef.update({'documents': existing});
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$category file(s) uploaded')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('$category file(s) uploaded')));
     }
   }
 
   Future<void> exportAllDocumentsAsZip() async {
     if (selectedLoadId == null) return;
 
-    final docRef = FirebaseFirestore.instance.collection('loads').doc(selectedLoadId);
+    final docRef =
+        FirebaseFirestore.instance.collection('loads').doc(selectedLoadId);
     final snap = await docRef.get();
     final data = snap.data()!;
     final documents = Map<String, dynamic>.from(data['documents'] ?? {});
@@ -62,7 +64,8 @@ class _LoadDocumentsScreenState extends State<LoadDocumentsScreen> {
 
     encoder.close();
 
-    await Share.shareXFiles([XFile(zipPath)], text: 'Documents for Load ${data['loadNumber']}');
+    await Share.shareXFiles([XFile(zipPath)],
+        text: 'Documents for Load ${data['loadNumber']}');
   }
 
   @override
@@ -73,7 +76,10 @@ class _LoadDocumentsScreenState extends State<LoadDocumentsScreen> {
         children: [
           const SizedBox(height: 10),
           StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance.collection('loads').orderBy('createdAt', descending: true).snapshots(),
+            stream: FirebaseFirestore.instance
+                .collection('loads')
+                .orderBy('createdAt', descending: true)
+                .snapshots(),
             builder: (context, snapshot) {
               if (!snapshot.hasData) return const CircularProgressIndicator();
               final loads = snapshot.data!.docs;

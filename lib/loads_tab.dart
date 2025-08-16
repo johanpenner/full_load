@@ -20,21 +20,27 @@ class _LoadsTabState extends State<LoadsTab> {
   String _query = '';
   String _role = 'viewer';
 
-  bool get _canEdit => kDevAllowAllWrites || _role == 'admin' || _role == 'dispatcher';
-  bool get _canDelete => kDevAllowAllWrites || _role == 'admin' || _role == 'dispatcher';
+  bool get _canEdit =>
+      kDevAllowAllWrites || _role == 'admin' || _role == 'dispatcher';
+  bool get _canDelete =>
+      kDevAllowAllWrites || _role == 'admin' || _role == 'dispatcher';
 
   @override
   void initState() {
     super.initState();
     _loadRole();
-    _searchCtrl.addListener(() => setState(() => _query = _searchCtrl.text.trim().toLowerCase()));
+    _searchCtrl.addListener(
+        () => setState(() => _query = _searchCtrl.text.trim().toLowerCase()));
   }
 
   Future<void> _loadRole() async {
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
-      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
       setState(() => _role = (doc.data() ?? const {})['role'] ?? 'viewer');
     } catch (_) {
       setState(() => _role = 'viewer');
@@ -71,7 +77,8 @@ class _LoadsTabState extends State<LoadsTab> {
                   controller: _searchCtrl,
                   decoration: const InputDecoration(
                     prefixIcon: Icon(Icons.search),
-                    hintText: 'Search by reference, client, shipper, receiver, driver',
+                    hintText:
+                        'Search by reference, client, shipper, receiver, driver',
                     border: OutlineInputBorder(),
                   ),
                 ),
@@ -87,7 +94,10 @@ class _LoadsTabState extends State<LoadsTab> {
             const SizedBox(height: 16),
             Expanded(
               child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: FirebaseFirestore.instance.collection('loads').orderBy('createdAt', descending: true).snapshots(),
+                stream: FirebaseFirestore.instance
+                    .collection('loads')
+                    .orderBy('createdAt', descending: true)
+                    .snapshots(),
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const Center(child: CircularProgressIndicator());
@@ -108,7 +118,9 @@ class _LoadsTabState extends State<LoadsTab> {
                               _matches(m['driverName']);
                         }).toList();
 
-                  if (filtered.isEmpty) return const Center(child: Text('No loads found.'));
+                  if (filtered.isEmpty) {
+                    return const Center(child: Text('No loads found.'));
+                  }
 
                   return ListView.builder(
                     itemCount: filtered.length,
@@ -116,13 +128,25 @@ class _LoadsTabState extends State<LoadsTab> {
                       final m = filtered[i].data();
                       return Card(
                         child: ListTile(
-                          title: Text('${m['ref'] ?? '(no ref)'} — ${m['clientName'] ?? ''}'),
-                          subtitle: Text('${m['shipperName'] ?? ''} → ${m['receiverName'] ?? ''} • ${m['status'] ?? 'open'}'),
+                          title: Text(
+                              '${m['ref'] ?? '(no ref)'} — ${m['clientName'] ?? ''}'),
+                          subtitle: Text(
+                              '${m['shipperName'] ?? ''} → ${m['receiverName'] ?? ''} • ${m['status'] ?? 'open'}'),
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              IconButton(tooltip: _canEdit ? 'Edit' : 'View', icon: const Icon(Icons.edit), onPressed: () => _openAddEditDialog(doc: filtered[i])),
-                              IconButton(tooltip: _canDelete ? 'Delete' : 'No permission', icon: const Icon(Icons.delete_outline), onPressed: _canDelete ? () => _confirmDelete(filtered[i]) : null),
+                              IconButton(
+                                  tooltip: _canEdit ? 'Edit' : 'View',
+                                  icon: const Icon(Icons.edit),
+                                  onPressed: () =>
+                                      _openAddEditDialog(doc: filtered[i])),
+                              IconButton(
+                                  tooltip:
+                                      _canDelete ? 'Delete' : 'No permission',
+                                  icon: const Icon(Icons.delete_outline),
+                                  onPressed: _canDelete
+                                      ? () => _confirmDelete(filtered[i])
+                                      : null),
                             ],
                           ),
                         ),
@@ -138,7 +162,8 @@ class _LoadsTabState extends State<LoadsTab> {
     );
   }
 
-  Future<void> _confirmDelete(QueryDocumentSnapshot<Map<String, dynamic>> d) async {
+  Future<void> _confirmDelete(
+      QueryDocumentSnapshot<Map<String, dynamic>> d) async {
     final ref = (d.data()['ref'] ?? '') as String;
     final ok = await showDialog<bool>(
       context: context,
@@ -146,8 +171,12 @@ class _LoadsTabState extends State<LoadsTab> {
         title: const Text('Delete Load?'),
         content: Text('Delete load "$ref"?'),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Delete')),
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Delete')),
         ],
       ),
     );
@@ -156,23 +185,27 @@ class _LoadsTabState extends State<LoadsTab> {
     try {
       await d.reference.delete();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Load deleted.')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Load deleted.')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
       }
     }
   }
 
-  Future<void> _openAddEditDialog({QueryDocumentSnapshot<Map<String, dynamic>>? doc}) async {
+  Future<void> _openAddEditDialog(
+      {QueryDocumentSnapshot<Map<String, dynamic>>? doc}) async {
     final isEdit = doc != null;
-    final data = isEdit ? (doc!.data()) : <String, dynamic>{};
+    final data = isEdit ? (doc.data()) : <String, dynamic>{};
 
     final ref = TextEditingController(text: data['ref'] ?? '');
     final clientName = TextEditingController(text: data['clientName'] ?? '');
     final shipperName = TextEditingController(text: data['shipperName'] ?? '');
-    final receiverName = TextEditingController(text: data['receiverName'] ?? '');
+    final receiverName =
+        TextEditingController(text: data['receiverName'] ?? '');
     final driverName = TextEditingController(text: data['driverName'] ?? '');
     final status = TextEditingController(text: data['status'] ?? 'open');
 
@@ -190,24 +223,42 @@ class _LoadsTabState extends State<LoadsTab> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  TextFormField(controller: ref, decoration: const InputDecoration(labelText: 'Reference *'), validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null),
+                  TextFormField(
+                      controller: ref,
+                      decoration:
+                          const InputDecoration(labelText: 'Reference *'),
+                      validator: (v) =>
+                          (v == null || v.trim().isEmpty) ? 'Required' : null),
                   const SizedBox(height: 8),
-                  TextFormField(controller: clientName, decoration: const InputDecoration(labelText: 'Client Name')),
+                  TextFormField(
+                      controller: clientName,
+                      decoration:
+                          const InputDecoration(labelText: 'Client Name')),
                   const SizedBox(height: 8),
-                  TextFormField(controller: shipperName, decoration: const InputDecoration(labelText: 'Shipper')),
+                  TextFormField(
+                      controller: shipperName,
+                      decoration: const InputDecoration(labelText: 'Shipper')),
                   const SizedBox(height: 8),
-                  TextFormField(controller: receiverName, decoration: const InputDecoration(labelText: 'Receiver')),
+                  TextFormField(
+                      controller: receiverName,
+                      decoration: const InputDecoration(labelText: 'Receiver')),
                   const SizedBox(height: 8),
-                  TextFormField(controller: driverName, decoration: const InputDecoration(labelText: 'Driver')),
+                  TextFormField(
+                      controller: driverName,
+                      decoration: const InputDecoration(labelText: 'Driver')),
                   const SizedBox(height: 8),
-                  TextFormField(controller: status, decoration: const InputDecoration(labelText: 'Status')),
+                  TextFormField(
+                      controller: status,
+                      decoration: const InputDecoration(labelText: 'Status')),
                 ],
               ),
             ),
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel')),
           if (_canEdit)
             ElevatedButton.icon(
               onPressed: () async {
@@ -229,9 +280,10 @@ class _LoadsTabState extends State<LoadsTab> {
 
                 try {
                   if (isEdit) {
-                    await doc!.reference.update(payload);
+                    await doc.reference.update(payload);
                     if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Load updated.')));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Load updated.')));
                     }
                   } else {
                     await FirebaseFirestore.instance.collection('loads').add({
@@ -240,12 +292,14 @@ class _LoadsTabState extends State<LoadsTab> {
                       'createdByUid': user?.uid,
                     });
                     if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Load added.')));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Load added.')));
                     }
                   }
                 } catch (e) {
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to save: $e')));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Failed to save: $e')));
                   }
                 }
               },

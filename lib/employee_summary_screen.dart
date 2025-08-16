@@ -49,7 +49,8 @@ class _EmployeeSummaryScreenState extends State<EmployeeSummaryScreen> {
   Future<void> exportFilteredCSV() async {
     final csvData = const ListToCsvConverter().convert(filteredRows);
     final directory = await getApplicationDocumentsDirectory();
-    final path = '${directory.path}/filtered_employees_${DateTime.now().millisecondsSinceEpoch}.csv';
+    final path =
+        '${directory.path}/filtered_employees_${DateTime.now().millisecondsSinceEpoch}.csv';
     final file = File(path);
     await file.writeAsString(csvData);
     Share.shareXFiles([XFile(file.path)], text: 'Filtered Employee Export');
@@ -69,7 +70,8 @@ class _EmployeeSummaryScreenState extends State<EmployeeSummaryScreen> {
       ),
     );
     final directory = await getApplicationDocumentsDirectory();
-    final path = '${directory.path}/filtered_employees_${DateTime.now().millisecondsSinceEpoch}.pdf';
+    final path =
+        '${directory.path}/filtered_employees_${DateTime.now().millisecondsSinceEpoch}.pdf';
     final file = File(path);
     await file.writeAsBytes(await pdf.save());
     Share.shareXFiles([XFile(file.path)], text: 'Filtered Employee PDF');
@@ -78,7 +80,8 @@ class _EmployeeSummaryScreenState extends State<EmployeeSummaryScreen> {
   Future<void> exportAllEmployeeFilesAsZip() async {
     final directory = await getApplicationDocumentsDirectory();
     final encoder = ZipFileEncoder();
-    final zipPath = '${directory.path}/employee_files_${DateTime.now().millisecondsSinceEpoch}.zip';
+    final zipPath =
+        '${directory.path}/employee_files_${DateTime.now().millisecondsSinceEpoch}.zip';
     encoder.create(zipPath);
 
     final snap = await FirebaseFirestore.instance.collection('employees').get();
@@ -114,35 +117,45 @@ class _EmployeeSummaryScreenState extends State<EmployeeSummaryScreen> {
                 DropdownButton<int?>(
                   hint: const Text('Min Load Count'),
                   value: loadFilter,
-                  items: [null, 1, 3, 5, 10].map((val) => DropdownMenuItem(value: val, child: Text(val?.toString() ?? 'All'))).toList(),
+                  items: [null, 1, 3, 5, 10]
+                      .map((val) => DropdownMenuItem(
+                          value: val, child: Text(val?.toString() ?? 'All')))
+                      .toList(),
                   onChanged: (val) => setState(() => loadFilter = val),
                 ),
                 ElevatedButton(
                   onPressed: () async {
                     final picked = await showDatePicker(
                       context: context,
-                      initialDate: DateTime.now().subtract(const Duration(days: 7)),
+                      initialDate:
+                          DateTime.now().subtract(const Duration(days: 7)),
                       firstDate: DateTime(2020),
                       lastDate: DateTime(2100),
                     );
                     if (picked != null) setState(() => recentCutoff = picked);
                   },
-                  child: Text(recentCutoff == null ? 'Filter by Activity' : 'After ${DateFormat('yyyy-MM-dd').format(recentCutoff!)}'),
+                  child: Text(recentCutoff == null
+                      ? 'Filter by Activity'
+                      : 'After ${DateFormat('yyyy-MM-dd').format(recentCutoff!)}'),
                 ),
               ],
             ),
           ),
           Expanded(
             child: StreamBuilder(
-              stream: FirebaseFirestore.instance.collection('employees').snapshots(),
+              stream: FirebaseFirestore.instance
+                  .collection('employees')
+                  .snapshots(),
               builder: (context, snapshot) {
-                if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+                if (!snapshot.hasData) {
+                  return const Center(child: CircularProgressIndicator());
+                }
                 final docs = snapshot.data!.docs;
 
                 return ListView.builder(
                   itemCount: docs.length,
                   itemBuilder: (context, index) {
-                    final data = docs[index].data() as Map<String, dynamic>;
+                    final data = docs[index].data();
                     final id = docs[index].id;
 
                     return FutureBuilder(
@@ -151,28 +164,41 @@ class _EmployeeSummaryScreenState extends State<EmployeeSummaryScreen> {
                         getLastActivity(id),
                       ]),
                       builder: (context, snapshot) {
-                        if (!snapshot.hasData) return const ListTile(title: Text('Loading...'));
+                        if (!snapshot.hasData) {
+                          return const ListTile(title: Text('Loading...'));
+                        }
                         final int loadCount = snapshot.data![0] as int;
-                        final DateTime? lastActive = snapshot.data![1] as DateTime?;
+                        final DateTime? lastActive =
+                            snapshot.data![1] as DateTime?;
 
-                        if (loadFilter != null && loadCount < loadFilter!) return const SizedBox();
-                        if (recentCutoff != null && (lastActive == null || lastActive.isBefore(recentCutoff!))) return const SizedBox();
+                        if (loadFilter != null && loadCount < loadFilter!) {
+                          return const SizedBox();
+                        }
+                        if (recentCutoff != null &&
+                            (lastActive == null ||
+                                lastActive.isBefore(recentCutoff!))) {
+                          return const SizedBox();
+                        }
 
                         final daysOff = data['availability']['daysOff'] ?? [];
                         final files = data['files'] ?? {};
-                        final fileCount = files.values.expand((v) => (v as List)).length;
+                        final fileCount =
+                            files.values.expand((v) => (v as List)).length;
 
                         filteredRows.add([
                           data['fullName'] ?? '',
                           data['phone'] ?? '',
                           '$loadCount',
                           lastActive?.toString().split(' ').first ?? '-',
-                          daysOff.map((e) => "${e['from']}➝${e['to']}").join(' | '),
+                          daysOff
+                              .map((e) => "${e['from']}➝${e['to']}")
+                              .join(' | '),
                           '$fileCount',
                         ]);
 
                         return Card(
-                          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          margin: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
                           child: ListTile(
                             title: Text(data['fullName'] ?? ''),
                             subtitle: Column(
@@ -180,9 +206,13 @@ class _EmployeeSummaryScreenState extends State<EmployeeSummaryScreen> {
                               children: [
                                 Text("Phone: ${data['phone'] ?? ''}"),
                                 Text("Loads: $loadCount"),
-                                Text("Last Active: ${lastActive?.toString().split(' ').first ?? 'N/A'}"),
-                                if (daysOff.isNotEmpty) Text("Days Off: ${daysOff.map((e) => "${e['from']}➝${e['to']}").join(' | ')}"),
-                                if (fileCount > 0) Text("Documents: $fileCount"),
+                                Text(
+                                    "Last Active: ${lastActive?.toString().split(' ').first ?? 'N/A'}"),
+                                if (daysOff.isNotEmpty)
+                                  Text(
+                                      "Days Off: ${daysOff.map((e) => "${e['from']}➝${e['to']}").join(' | ')}"),
+                                if (fileCount > 0)
+                                  Text("Documents: $fileCount"),
                               ],
                             ),
                           ),
