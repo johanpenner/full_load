@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'clients_tab.dart';
+import 'clients_all_in_one.dart'; // provides ClientsTab + ClientListScreen
 import 'receivers_tab.dart';
 import 'shippers_tab.dart';
 import 'employees_tab.dart';
@@ -8,7 +8,7 @@ import 'dispatcher_dashboard.dart';
 import 'new_load_screen.dart';
 import 'employee_summary_screen.dart';
 import 'dispatcher_summary_screen.dart';
-import 'loads_tab.dart'; // ✅ NEW: Loads manager tab
+import 'loads_tab.dart';
 import 'load_list_screen.dart';
 import 'driver_upload_screen.dart';
 
@@ -22,19 +22,18 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _index = 0;
 
-  // Not const: some screens may not have const constructors
   late final List<Widget> tabs = <Widget>[
-    ClientsTab(),
+    const ClientsTab(),
     ReceiversTab(),
     ShippersTab(),
     EmployeesTab(),
     DispatcherDashboard(),
-    NewLoadScreen(),
+    const NewLoadScreen(),
     EmployeeSummaryScreen(),
     DispatcherSummaryScreen(),
-    LoadsTab(),          // ✅ NEW tab
-    LoadListScreen(),    // (Optional) keep your existing "All Loads" view
-    DriverUploadScreen(),
+    LoadsTab(),
+    LoadListScreen(),
+    const DriverUploadScreen(),
   ];
 
   static const List<String> labels = <String>[
@@ -46,7 +45,7 @@ class _HomeScreenState extends State<HomeScreen> {
     'New Load',
     'Summary',
     'Charts',
-    'Loads',       // ✅ NEW
+    'Loads',
     'All Loads',
     'Driver Upload',
   ];
@@ -60,7 +59,7 @@ class _HomeScreenState extends State<HomeScreen> {
     Icons.add_box,
     Icons.bar_chart,
     Icons.analytics,
-    Icons.assignment,   // ✅ NEW icon for Loads
+    Icons.assignment,
     Icons.archive,
     Icons.upload_file,
   ];
@@ -68,26 +67,33 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     assert(tabs.length == labels.length && labels.length == icons.length,
-        'tabs/labels/icons must have the same length');
+        'tabs/labels/icons must match');
+
+    final safeIndex =
+        (_index >= 0 && _index < tabs.length) ? _index : 0; // guard
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Full Load')),
+      appBar: AppBar(
+        title: const Text('Full Load'),
+        actions: [
+          IconButton(
+            tooltip: 'Open Clients',
+            icon: const Icon(Icons.people),
+            onPressed: () => Navigator.pushNamed(context, '/clients'),
+          ),
+        ],
+      ),
       body: SafeArea(
-        child: IndexedStack(
-          index: _index,
-          children: tabs,
-        ),
+        child: IndexedStack(index: safeIndex, children: tabs),
       ),
       bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _index,
+        currentIndex: safeIndex,
         type: BottomNavigationBarType.fixed,
-        onTap: (i) => setState(() => _index = i),
+        onTap: (i) => setState(() => _index = i), // i is int
         items: List.generate(
           tabs.length,
-          (i) => BottomNavigationBarItem(
-            icon: Icon(icons[i]),
-            label: labels[i],
-          ),
+          (i) =>
+              BottomNavigationBarItem(icon: Icon(icons[i]), label: labels[i]),
         ),
       ),
     );

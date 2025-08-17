@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'firebase_options.dart';
-import 'home_screen.dart'; // Make sure this file exists in lib/
 
-void main() async {
+import 'firebase_options.dart';
+import 'home_screen.dart';
+import 'clients_all_in_one.dart'; // route target for /clients
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-
   runApp(const MyApp());
 }
 
@@ -20,8 +21,14 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Full Load',
-      theme: ThemeData(primarySwatch: Colors.blue),
-      home: const HomeScreen(), // ✅ This connects everything
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+        useMaterial3: true,
+      ),
+      home: const HomeScreen(),
+      routes: {
+        '/clients': (_) => const ClientListScreen(),
+      },
     );
   }
 }
