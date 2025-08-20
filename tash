@@ -1,0 +1,166 @@
+[1mdiff --git a/lib/employees_tab.dart b/lib/employees_tab.dart[m
+[1mindex 104b9bf..adfad71 100644[m
+[1m--- a/lib/employees_tab.dart[m
+[1m+++ b/lib/employees_tab.dart[m
+[36m@@ -1,72 +1,593 @@[m
+ // lib/employees_tab.dart[m
+[31m-// Employees: DEV mode enables Add/Edit/Delete; dialogs close next frame to avoid assert.[m
+[31m-// Turn kDevAllowAllWrites to false for production.[m
+[32m+[m[32m// Employees: list + full-screen editor (clean like Shippers/Receivers).[m
+[32m+[m[32m// Save closes immediately; Firestore writes finish in background.[m
+[32m+[m[32m// Features:[m
+[32m+[m[32m// - Alias/Employee Ref (toggle + field, with Suggest button)[m
+[32m+[m[32m// - Filters: All / Newest / Most Productive / Current / Former / On Leave / Laid Off / Fired[m
+[32m+[m[32m// - Rehire flow (match former employee by SIN/email/name+DOB → Reinstate)[m
+[32m+[m[32m// - Files: CVOR, License, Tickets, Damages, Accidents & Reports, Other[m
+[32m+[m[32m// - Employment lifecycle (active/former/leave + separation details)[m
+[32m+[m[32m// - Birthday reminder toggle[m
+[32m+[m[32m//[m
+[32m+[m[32m// Patches in this file:[m
+[32m+[m[32m// - Robust parsing of productivityScore (no null cast)[m
+[32m+[m[32m// - Robust parsing of EmployeeFile.size (handles null/double/int)[m
+[32m+[m[32m//[m
+[32m+[m[32m// NEW:[m
+[32m+[m[32m// - File uploads include Storage metadata (uploaderUid) via util/storage_upload.dart[m
+[32m+[m[32m// - Time Off manager (all-day or hours) at employees/{uid}/time_off[m
+[32m+[m[32m// - Export ZIP for files (desktop)[m
+[32m+[m[32m// - Time-Off pill on list (OFF now / Off in Xd) using nextTimeOff* aggregator[m
+[32m+[m[32m// - Restrictions editor (banned/avoid regions, banned clients/locations) + list shield icon[m
+[32m+[m[32m// - Restriction helpers for driver assignment filtering/warnings[m
+ [m
+[32m+[m[32mimport 'dart:typed_data';[m
+[32m+[m[32mimport 'dart:io' as io show File, Directory, Platform;[m
+[32m+[m[32mimport 'dart:math' as math;[m
+[32m+[m
+[32m+[m[32mimport 'package:flutter/foundation.dart' show kIsWeb;[m
+ import 'package:flutter/material.dart';[m
+ import 'package:cloud_firestore/cloud_firestore.dart';[m
+[32m+[m[32mimport 'package:firebase_storage/firebase_storage.dart';[m
+ import 'package:firebase_auth/firebase_auth.dart';[m
+[32m+[m[32mimport 'package:file_picker/file_picker.dart';[m
+[32m+[m[32mimport 'package:url_launcher/url_launcher.dart';[m
+[32m+[m[32mimport 'package:archive/archive.dart';[m
+[32m+[m[32mimport 'package:http/http.dart' as http;[m
+[32m+[m[32mimport 'package:intl/intl.dart';[m
+[32m+[m
+[32m+[m[32mimport 'util/storage_upload.dart';[m
+[32m+[m
+[32m+[m[32m/// =======================[m
+[32m+[m[32m/// Utils[m
+[32m+[m[32m/// =======================[m
+[32m+[m
+[32m+[m[32mString _newId() => DateTime.now().microsecondsSinceEpoch.toString();[m
+[32m+[m
+[32m+[m[32mString _oneLine(String s) =>[m
+[32m+[m[32m    s.replaceAll('\n', ', ').replaceAll(RegExp(r'\s+'), ' ').trim();[m
+[32m+[m
+[32m+[m[32mFuture<void> _callNumber(BuildContext context, String? raw) async {[m
+[32m+[m[32m  final s = (raw ?? '').replaceAll(RegExp(r'[^0-9+*#]'), '');[m
+[32m+[m[32m  if (s.isEmpty) {[m
+[32m+[m[32m    ScaffoldMessenger.maybeOf(context)[m
+[32m+[m[32m        ?.showSnackBar(const SnackBar(content: Text('No phone number')));[m
+[32m+[m[32m    return;[m
+[32m+[m[32m  }[m
+[32m+[m[32m  final uri = Uri(scheme: 'tel', path: s);[m
+[32m+[m[32m  final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);[m
+[32m+[m[32m  if (!ok) {[m
+[32m+[m[32m    ScaffoldMessenger.maybeOf(context)?.showSnackBar([m
+[32m+[m[32m        const SnackBar(content: Text('This device cannot place calls')));[m
+[32m+[m[32m  }[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mString _fmtDate(DateTime? d) {[m
+[32m+[m[32m  if (d == null) return '';[m
+[32m+[m[32m  return '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mint? _daysUntilBirthday(DateTime? dob) {[m
+[32m+[m[32m  if (dob == null) return null;[m
+[32m+[m[32m  final now = DateTime.now();[m
+[32m+[m[32m  var next = DateTime(now.year, dob.month, dob.day);[m
+[32m+[m[32m  if (next.isBefore(DateTime(now.year, now.month, now.day))) {[m
+[32m+[m[32m    next = DateTime(now.year + 1, dob.month, dob.day);[m
+[32m+[m[32m  }[m
+[32m+[m[32m  return next.difference(DateTime(now.year, now.month, now.day)).inDays;[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mString _two(int n) => n.toString().padLeft(2, '0');[m
+[32m+[m
+[32m+[m[32mString _fmtRange(DateTime s, DateTime e, bool allDay) {[m
+[32m+[m[32m  String d(DateTime x) =>[m
+[32m+[m[32m      '${x.year}-${_two(x.month)}-${_two(x.day)}${allDay ? '' : ' ${_two(x.hour)}:${_two(x.minute)}'}';[m
+[32m+[m[32m  return '${d(s)}  →  ${d(e)}${allDay ? '  (all day)' : ''}';[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32m/// Content-Type helper (replaces PlatformFile.mimeType)[m
+[32m+[m[32mString _contentTypeFor(String name) {[m
+[32m+[m[32m  final ext =[m
+[32m+[m[32m      name.split('.').length > 1 ? name.split('.').last.toLowerCase() : '';[m
+[32m+[m[32m  switch (ext) {[m
+[32m+[m[32m    case 'pdf':[m
+[32m+[m[32m      return 'application/pdf';[m
+[32m+[m[32m    case 'jpg':[m
+[32m+[m[32m    case 'jpeg':[m
+[32m+[m[32m      return 'image/jpeg';[m
+[32m+[m[32m    case 'png':[m
+[32m+[m[32m      return 'image/png';[m
+[32m+[m[32m    case 'gif':[m
+[32m+[m[32m      return 'image/gif';[m
+[32m+[m[32m    case 'webp':[m
+[32m+[m[32m      return 'image/webp';[m
+[32m+[m[32m    case 'heic':[m
+[32m+[m[32m      return 'image/heic';[m
+[32m+[m[32m    case 'bmp':[m
+[32m+[m[32m      return 'image/bmp';[m
+[32m+[m[32m    case 'tif':[m
+[32m+[m[32m    case 'tiff':[m
+[32m+[m[32m      return 'image/tiff';[m
+[32m+[m[32m    case 'txt':[m
+[32m+[m[32m      return 'text/plain';[m
+[32m+[m[32m    case 'csv':[m
+[32m+[m[32m      return 'text/csv';[m
+[32m+[m[32m    case 'json':[m
+[32m+[m[32m      return 'application/json';[m
+[32m+[m[32m    case 'doc':[m
+[32m+[m[32m      return 'application/msword';[m
+[32m+[m[32m    case 'docx':[m
+[32m+[m[32m      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';[m
+[32m+[m[32m    case 'xls':[m
+[32m+[m[32m      return 'application/vnd.ms-excel';[m
+[32m+[m[32m    case 'xlsx':[m
+[32m+[m[32m      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';[m
+[32m+[m[32m    case 'zip':[m
+[32m+[m[32m      return 'application/zip';[m
+[32m+[m[32m    case 'rar':[m
+[32m+[m[32m      return 'application/vnd.rar';[m
+[32m+[m[32m    case '7z':[m
+[32m+[m[32m      return 'application/x-7z-compressed';[m
+[32m+[m[32m    case 'tar':[m
+[32m+[m[32m      return 'application/x-tar';[m
+[32m+[m[32m    case 'gz':[m
+[32m+[m[32m      return 'application/gzip';[m
+[32m+[m[32m    case 'mp4':[m
+[32m+[m[32m      return 'video/mp4';[m
+[32m+[m[32m    case 'mov':[m
+[32m+[m[32m      return 'video/quicktime';[m
+[32m+[m[32m    case 'avi':[m
+[32m+[m[32m      return 'video/x-msvideo';[m
+[32m+[m[32m    case 'mkv':[m
+[32m+[m[32m      return 'video/x-matroska';[m
+[32m+[m[32m    case 'mp3':[m
+[32m+[m[32m      return 'audio/mpeg';[m
+[32m+[m[32m    case 'wav':[m
+[32m+[m[32m      return 'audio/wav';[m
+[32m+[m[32m    case 'ogg':[m
+[32m+[m[32m      return 'audio/ogg';[m
+[32m+[m[32m    default:[m
+[32m+[m[32m      return 'application/octet-stream';[m
+[32m+[m[32m  }[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mDateTime? _asDate(dynamic v) {[m
+[32m+[m[32m  if (v == null) return null;[m
+[32m+[m[32m  if (v is Timestamp) return v.toDate();[m
+[32m+[m[32m  if (v is DateTime) return v;[m
+[32m+[m[32m  if (v is int) return DateTime.fromMillisecondsSinceEpoch(v);[m
+[32m+[m[32m  if (v is String) r

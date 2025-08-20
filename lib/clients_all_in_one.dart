@@ -1,3 +1,7 @@
+// lib/clients_all_in_one.dart
+// Clients: add/edit + list, logos, tap-to-call/SMS/email, Billing Profiles + Billing Rules.
+// Save closes immediately; Firestore writes finish in the background.
+
 import 'dart:typed_data';
 import 'dart:io' as io show File;
 
@@ -9,6 +13,81 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
+
+// (kept if you use it elsewhere)
+import 'util/storage_upload.dart';
+import 'util/safe_image_picker.dart';
+
+/// =======================
+/// Utilities / IDs
+/// =======================
+
+String _newId() => DateTime.now().microsecondsSinceEpoch.toString();
+
+/// Phone / SMS / Email helpers
+String _digitsOnlyForDial(String? raw) =>
+    (raw ?? '').replaceAll(RegExp(r'[^0-9+*#]'), '');
+
+Future<void> _callNumber(BuildContext context, String? raw) async {
+  final s = _digitsOnlyForDial(raw);
+  if (s.isEmpty) {
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(const SnackBar(content: Text('No phone number')));
+    return;
+  }
+  final uri = Uri(scheme: 'tel', path: s);
+  final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+  if (!ok) {
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(const SnackBar(content: Text('No calling app available')));
+  }
+}
+
+Future<void> _sendSms(BuildContext context, String? raw, {String? body}) async {
+  final s = _digitsOnlyForDial(raw);
+  if (s.isEmpty) {
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(const SnackBar(content: Text('No mobile number')));
+    return;
+  }
+  final smsUri = Uri(
+    scheme: 'sms',
+    path: s,
+    queryParameters: { if ((body ?? '').trim().isNotEmpty) 'body': body!.trim() },
+  );
+  var ok = await launchUrl(smsUri, mode: LaunchMode.externalApplication);
+  if (!ok) {
+    final alt = Uri(scheme: 'smsto', path: s);
+    ok = await launchUrl(alt, mode: LaunchMode.externalApplication);
+  }
+  if (!ok) {
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(const SnackBar(content: Text('No SMS app available')));
+  }
+}
+
+Future<void> _composeEmail(BuildContext context, String email,
+    {String? subject, String? body}) async {
+  final e = email.trim();
+  if (e.isEmpty) {
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(const SnackBar(content: Text('No email address')));
+    return;
+  }
+  final uri = Uri(
+    scheme: 'mailto',
+    path: e,
+    queryParameters: {
+      if ((subject ?? '').trim().isNotEmpty) 'subject': subject!.trim(),
+      if ((body ?? '').trim().isNotEmpty) 'body': body!.trim(),
+    },
+  );
+  final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+  if (!ok) {
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(const SnackBar(content: Text('No email app available')));
+  }
+}
 
 /// =======================
 /// Models
@@ -53,6 +132,261 @@ class Contact {
       phone: (m?['phone'] ?? '').toString());
 }
 
+/// Flexible contacts (division/person + type/value)
+class ClientContactPoint {
+  String id;
+  String division; // e.g., Dispatch, Shipping, Accounting
+  String person;   // who to talk to
+  String type;     // 'work_phone' | 'mobile' | 'email'
+  String value;    // number or email
+  String ext;      // for work_phone
+  bool primary;    // preferred for this type
+
+  ClientContactPoint({
+    String? id,
+    this.division = '',
+    this.person = '',
+    this.type = 'work_phone',
+    this.value = '',
+    this.ext = '',
+    this.primary = false,
+  }) : id = id ?? _newId();
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'division': division,
+        'person': person,
+        'type': type,
+        'value': value,
+        'ext': ext,
+        'primary': primary,
+      };
+
+  factory ClientContactPoint.fromMap(Map<String, dynamic>? m) =>
+      ClientContactPoint(
+        id: (m?['id'] ?? _newId()).toString(),
+        division: (m?['division'] ?? '').toString(),
+        person: (m?['person'] ?? '').toString(),
+        type: (m?['type'] ?? 'work_phone').toString(),
+        value: (m?['value'] ?? '').toString(),
+        ext: (m?['ext'] ?? '').toString(),
+        primary: (m?['primary'] ?? false) as bool,
+      );
+}
+
+/// =======================
+/// Contact helpers (pretty text, best picks, badges)
+/// =======================
+
+String _cpPretty(ClientContactPoint cp) {
+  switch (cp.type) {
+    case 'work_phone':
+      final ex = cp.ext.trim().isEmpty ? '' : ' ext ${cp.ext.trim()}';
+      return '${cp.division.isNotEmpty ? '${cp.division} · ' : ''}'
+             '${cp.person.isNotEmpty ? '${cp.person} · ' : ''}'
+             '${cp.value}$ex';
+    case 'mobile':
+    case 'email':
+      return '${cp.division.isNotEmpty ? '${cp.division} · ' : ''}'
+             '${cp.person.isNotEmpty ? '${cp.person} · ' : ''}'
+             '${cp.value}';
+    default:
+      return cp.value;
+  }
+}
+
+ClientContactPoint? _bestPhone(List<ClientContactPoint> list) {
+  if (list.isEmpty) return null;
+  final workPrim = list.firstWhere(
+      (c) => c.type == 'work_phone' && c.primary && c.value.trim().isNotEmpty,
+      orElse: () => ClientContactPoint(value: ''));
+  if (workPrim.value.isNotEmpty) return workPrim;
+  final workAny = list.firstWhere(
+      (c) => c.type == 'work_phone' && c.value.trim().isNotEmpty,
+      orElse: () => ClientContactPoint(value: ''));
+  if (workAny.value.isNotEmpty) return workAny;
+  final mobPrim = list.firstWhere(
+      (c) => c.type == 'mobile' && c.primary && c.value.trim().isNotEmpty,
+      orElse: () => ClientContactPoint(value: ''));
+  if (mobPrim.value.isNotEmpty) return mobPrim;
+  final mobAny = list.firstWhere(
+      (c) => c.type == 'mobile' && c.value.trim().isNotEmpty,
+      orElse: () => ClientContactPoint(value: ''));
+  return mobAny.value.isNotEmpty ? mobAny : null;
+}
+
+ClientContactPoint? _bestMobile(List<ClientContactPoint> list) {
+  if (list.isEmpty) return null;
+  final pri = list.firstWhere(
+      (c) => c.type == 'mobile' && c.primary && c.value.trim().isNotEmpty,
+      orElse: () => ClientContactPoint(value: ''));
+  if (pri.value.isNotEmpty) return pri;
+  final any = list.firstWhere(
+      (c) => c.type == 'mobile' && c.value.trim().isNotEmpty,
+      orElse: () => ClientContactPoint(value: ''));
+  return any.value.isNotEmpty ? any : null;
+}
+
+ClientContactPoint? _bestEmail(List<ClientContactPoint> list) {
+  if (list.isEmpty) return null;
+  final pri = list.firstWhere(
+      (c) => c.type == 'email' && c.primary && c.value.trim().isNotEmpty,
+      orElse: () => ClientContactPoint(value: ''));
+  if (pri.value.isNotEmpty) return pri;
+  final any = list.firstWhere(
+      (c) => c.type == 'email' && c.value.trim().isNotEmpty,
+      orElse: () => ClientContactPoint(value: ''));
+  return any.value.isNotEmpty ? any : null;
+}
+
+/// Top N divisions by occurrence in contact points
+List<String> _topDivisions(List<ClientContactPoint> cps, {int max = 3}) {
+  final counts = <String, int>{};
+  for (final c in cps) {
+    final d = c.division.trim();
+    if (d.isEmpty) continue;
+    counts[d] = (counts[d] ?? 0) + 1;
+  }
+  final top = counts.entries.toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
+  return top.take(max).map((e) => e.key).toList();
+}
+
+/// Small pill-style badge widget
+Widget _divBadge(String text) => Container(
+  margin: const EdgeInsets.only(top: 4, right: 6),
+  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+  decoration: BoxDecoration(
+    color: Colors.blueGrey.withOpacity(0.08),
+    borderRadius: BorderRadius.circular(12),
+    border: Border.all(color: Colors.blueGrey.withOpacity(0.35)),
+  ),
+  child: Text(text, style: const TextStyle(fontSize: 11)),
+);
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'division': division,
+        'person': person,
+        'type': type,
+        'value': value,
+        'ext': ext,
+        'primary': primary,
+      };
+
+  factory ClientContactPoint.fromMap(Map<String, dynamic>? m) =>
+      ClientContactPoint(
+        id: (m?['id'] ?? _newId()).toString(),
+        division: (m?['division'] ?? '').toString(),
+        person: (m?['person'] ?? '').toString(),
+        type: (m?['type'] ?? 'work_phone').toString(),
+        value: (m?['value'] ?? '').toString(),
+        ext: (m?['ext'] ?? '').toString(),
+        primary: (m?['primary'] ?? false) as bool,
+      );
+}
+
+/// Billing Profile
+class BillingProfile {
+  String id;
+  String name;
+  String billToName;
+  Address address;
+  List<String> arEmails;
+  List<String> ccEmails;
+  int paymentTermsDays;
+  bool poRequired;
+  bool isDefault;
+  String notes;
+
+  BillingProfile({
+    String? id,
+    this.name = '',
+    this.billToName = '',
+    Address? address,
+    List<String>? arEmails,
+    List<String>? ccEmails,
+    this.paymentTermsDays = 30,
+    this.poRequired = false,
+    this.isDefault = false,
+    this.notes = '',
+  })  : id = id ?? _newId(),
+        address = address ?? Address(),
+        arEmails = arEmails ?? <String>[],
+        ccEmails = ccEmails ?? <String>[];
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'name': name,
+        'billToName': billToName,
+        'address': address.toMap(),
+        'arEmails': arEmails,
+        'ccEmails': ccEmails,
+        'paymentTermsDays': paymentTermsDays,
+        'poRequired': poRequired,
+        'isDefault': isDefault,
+        'notes': notes,
+      };
+
+  factory BillingProfile.fromMap(Map<String, dynamic>? m) => BillingProfile(
+        id: (m?['id'] ?? _newId()).toString(),
+        name: (m?['name'] ?? '').toString(),
+        billToName: (m?['billToName'] ?? '').toString(),
+        address: Address.fromMap(m?['address'] as Map<String, dynamic>?),
+        arEmails: (m?['arEmails'] is List)
+            ? List<String>.from(m!['arEmails'])
+            : <String>[],
+        ccEmails: (m?['ccEmails'] is List)
+            ? List<String>.from(m!['ccEmails'])
+            : <String>[],
+        paymentTermsDays: (m?['paymentTermsDays'] ?? 30) is int
+            ? (m?['paymentTermsDays'] as int)
+            : int.tryParse((m?['paymentTermsDays'] ?? '30').toString()) ?? 30,
+        poRequired: (m?['poRequired'] ?? false) as bool,
+        isDefault: (m?['isDefault'] ?? false) as bool,
+        notes: (m?['notes'] ?? '').toString(),
+      );
+}
+
+/// Billing Rule
+class BillingRule {
+  String id;
+  String label;
+  String triggerType; // 'productTag' | 'always'
+  String value;
+  String billingProfileId;
+  int priority;
+
+  BillingRule({
+    String? id,
+    this.label = '',
+    this.triggerType = 'productTag',
+    this.value = '',
+    this.billingProfileId = '',
+    this.priority = 100,
+  }) : id = id ?? _newId();
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'label': label,
+        'triggerType': triggerType,
+        'value': value,
+        'billingProfileId': billingProfileId,
+        'priority': priority,
+      };
+
+  factory BillingRule.fromMap(Map<String, dynamic>? m) => BillingRule(
+        id: (m?['id'] ?? _newId()).toString(),
+        label: (m?['label'] ?? '').toString(),
+        triggerType: (m?['triggerType'] ?? 'productTag').toString(),
+        value: (m?['value'] ?? '').toString(),
+        billingProfileId: (m?['billingProfileId'] ?? '').toString(),
+        priority: (m?['priority'] ?? 100) is int
+            ? (m?['priority'] as int)
+            : int.tryParse((m?['priority'] ?? '100').toString()) ?? 100,
+      );
+}
+
 class Client {
   String id;
   String displayName, legalName, taxId, currency;
@@ -66,6 +400,12 @@ class Client {
   String notes;
   List<String> tags;
   String logoUrl;
+
+  List<BillingProfile> billingProfiles;
+  List<BillingRule> billingRules;
+
+  // NEW: division/person contact points
+  List<ClientContactPoint> contactPoints;
 
   Client({
     this.id = '',
@@ -88,11 +428,17 @@ class Client {
     this.notes = '',
     List<String>? tags,
     this.logoUrl = '',
+    List<BillingProfile>? billingProfiles,
+    List<BillingRule>? billingRules,
+    List<ClientContactPoint>? contactPoints,
   })  : mailingAddress = mailingAddress ?? Address(),
         billingAddress = billingAddress ?? Address(),
         primaryContact = primaryContact ?? Contact(),
         billingContact = billingContact ?? Contact(),
-        tags = tags ?? [];
+        tags = tags ?? [],
+        billingProfiles = billingProfiles ?? <BillingProfile>[],
+        billingRules = billingRules ?? <BillingRule>[],
+        contactPoints = contactPoints ?? <ClientContactPoint>[];
 
   Map<String, dynamic> toMap() => {
         'displayName': displayName,
@@ -114,6 +460,9 @@ class Client {
         'notes': notes,
         'tags': tags,
         'logoUrl': logoUrl,
+        'billingProfiles': billingProfiles.map((e) => e.toMap()).toList(),
+        'billingRules': billingRules.map((e) => e.toMap()).toList(),
+        'contactPoints': contactPoints.map((e) => e.toMap()).toList(),
         'name_lower': displayName.toLowerCase(),
         'updatedAt': FieldValue.serverTimestamp(),
         if (id.isEmpty) 'createdAt': FieldValue.serverTimestamp(),
@@ -127,7 +476,9 @@ class Client {
       legalName: (m['legalName'] ?? '').toString(),
       taxId: (m['taxId'] ?? '').toString(),
       currency: (m['currency'] ?? 'CAD').toString(),
-      paymentTermsDays: (m['paymentTermsDays'] ?? 30) as int,
+      paymentTermsDays: (m['paymentTermsDays'] ?? 30) is int
+          ? m['paymentTermsDays'] as int
+          : int.tryParse((m['paymentTermsDays'] ?? '30').toString()) ?? 30,
       creditLimit: (m['creditLimit']),
       prepayRequired: (m['prepayRequired'] ?? false) as bool,
       creditHold: (m['creditHold'] ?? false) as bool,
@@ -146,6 +497,22 @@ class Client {
       notes: (m['notes'] ?? '').toString(),
       tags: (m['tags'] is List ? List<String>.from(m['tags']) : <String>[]),
       logoUrl: (m['logoUrl'] ?? '').toString(),
+      billingProfiles: (m['billingProfiles'] is List)
+          ? (m['billingProfiles'] as List)
+              .map((x) => BillingProfile.fromMap(x as Map<String, dynamic>?))
+              .toList()
+          : <BillingProfile>[],
+      billingRules: (m['billingRules'] is List)
+          ? (m['billingRules'] as List)
+              .map((x) => BillingRule.fromMap(x as Map<String, dynamic>?))
+              .toList()
+          : <BillingRule>[],
+      contactPoints: (m['contactPoints'] is List)
+          ? (m['contactPoints'] as List)
+              .map(
+                  (x) => ClientContactPoint.fromMap(x as Map<String, dynamic>?))
+              .toList()
+          : <ClientContactPoint>[],
     );
   }
 }
@@ -154,8 +521,11 @@ class Client {
 /// Helpers
 /// =======================
 
+String _digitsOnlyForDial(String? raw) =>
+    (raw ?? '').replaceAll(RegExp(r'[^0-9+*#]'), '');
+
 Future<void> _callNumber(BuildContext context, String? raw) async {
-  final s = (raw ?? '').replaceAll(RegExp(r'[^0-9+*#]'), '');
+  final s = _digitsOnlyForDial(raw);
   if (s.isEmpty) {
     ScaffoldMessenger.maybeOf(context)
         ?.showSnackBar(const SnackBar(content: Text('No phone number')));
@@ -169,8 +539,169 @@ Future<void> _callNumber(BuildContext context, String? raw) async {
   }
 }
 
+Future<void> _sendSms(BuildContext context, String? raw, {String? body}) async {
+  final s = _digitsOnlyForDial(raw);
+  if (s.isEmpty) {
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(const SnackBar(content: Text('No mobile number')));
+    return;
+  }
+  // Try sms:, fallback to smsto:
+  final smsUri = Uri(
+    scheme: 'sms',
+    path: s,
+    queryParameters: {
+      if ((body ?? '').trim().isNotEmpty) 'body': body!.trim(),
+    },
+  );
+  var ok = await launchUrl(smsUri, mode: LaunchMode.externalApplication);
+  if (!ok) {
+    final alt = Uri(scheme: 'smsto', path: s);
+    ok = await launchUrl(alt, mode: LaunchMode.externalApplication);
+  }
+  if (!ok) {
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(const SnackBar(content: Text('No SMS app available')));
+  }
+}
+
+Future<void> _composeEmail(BuildContext context, String email,
+    {String? subject, String? body}) async {
+  final e = (email).trim();
+  if (e.isEmpty) {
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(const SnackBar(content: Text('No email address')));
+    return;
+  }
+  final uri = Uri(
+    scheme: 'mailto',
+    path: e,
+    queryParameters: {
+      if ((subject ?? '').trim().isNotEmpty) 'subject': subject!.trim(),
+      if ((body ?? '').trim().isNotEmpty) 'body': body!.trim(),
+    },
+  );
+  final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+  if (!ok) {
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(const SnackBar(content: Text('No email app available')));
+  }
+}
+
+String _cpPretty(ClientContactPoint cp) {
+  switch (cp.type) {
+    case 'work_phone':
+      final ext = cp.ext.trim().isEmpty ? '' : ' ext ${cp.ext.trim()}';
+      return '${cp.division.isNotEmpty ? '${cp.division} · ' : ''}'
+          '${cp.person.isNotEmpty ? '${cp.person} · ' : ''}'
+          '${cp.value}$ext';
+    case 'mobile':
+      return '${cp.division.isNotEmpty ? '${cp.division} · ' : ''}'
+          '${cp.person.isNotEmpty ? '${cp.person} · ' : ''}'
+          '${cp.value}';
+    case 'email':
+      return '${cp.division.isNotEmpty ? '${cp.division} · ' : ''}'
+          '${cp.person.isNotEmpty ? '${cp.person} · ' : ''}'
+          '${cp.value}';
+    default:
+      return cp.value;
+  }
+}
+
+ClientContactPoint? _bestPhone(List<ClientContactPoint> list) {
+  if (list.isEmpty) return null;
+  final workPrim = list.firstWhere(
+      (c) => c.type == 'work_phone' && c.primary && c.value.trim().isNotEmpty,
+      orElse: () => ClientContactPoint(value: ''));
+  if (workPrim.value.isNotEmpty) return workPrim;
+  final workAny = list.firstWhere(
+      (c) => c.type == 'work_phone' && c.value.trim().isNotEmpty,
+      orElse: () => ClientContactPoint(value: ''));
+  if (workAny.value.isNotEmpty) return workAny;
+  final mobPrim = list.firstWhere(
+      (c) => c.type == 'mobile' && c.primary && c.value.trim().isNotEmpty,
+      orElse: () => ClientContactPoint(value: ''));
+  if (mobPrim.value.isNotEmpty) return mobPrim;
+  final mobAny = list.firstWhere(
+      (c) => c.type == 'mobile' && c.value.trim().isNotEmpty,
+      orElse: () => ClientContactPoint(value: ''));
+  if (mobAny.value.isNotEmpty) return mobAny;
+  return null;
+}
+
+ClientContactPoint? _bestMobile(List<ClientContactPoint> list) {
+  if (list.isEmpty) return null;
+  final pri = list.firstWhere(
+      (c) => c.type == 'mobile' && c.primary && c.value.trim().isNotEmpty,
+      orElse: () => ClientContactPoint(value: ''));
+  if (pri.value.isNotEmpty) return pri;
+  final any = list.firstWhere(
+      (c) => c.type == 'mobile' && c.value.trim().isNotEmpty,
+      orElse: () => ClientContactPoint(value: ''));
+  return any.value.isNotEmpty ? any : null;
+}
+
+ClientContactPoint? _bestEmail(List<ClientContactPoint> list) {
+  if (list.isEmpty) return null;
+  final pri = list.firstWhere(
+      (c) => c.type == 'email' && c.primary && c.value.trim().isNotEmpty,
+      orElse: () => ClientContactPoint(value: ''));
+  if (pri.value.isNotEmpty) return pri;
+  final any = list.firstWhere(
+      (c) => c.type == 'email' && c.value.trim().isNotEmpty,
+      orElse: () => ClientContactPoint(value: ''));
+  return any.value.isNotEmpty ? any : null;
+}
+
+List<String> _topDivisions(List<ClientContactPoint> cps, {int max = 3}) {
+  final counts = <String, int>{};
+  for (final c in cps) {
+    final d = c.division.trim();
+    if (d.isEmpty) continue;
+    counts[d] = (counts[d] ?? 0) + 1;
+  }
+  final top = counts.entries.toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
+  return top.take(max).map((e) => e.key).toList();
+}
+
+Widget _divBadge(String text) => Container(
+      margin: const EdgeInsets.only(top: 4, right: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.blueGrey.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.blueGrey.withOpacity(0.35)),
+      ),
+      child: Text(text, style: const TextStyle(fontSize: 11)),
+    );
+
+/// Pick billing profile by simple rules
+BillingProfile? pickBillingProfileForLoad({
+  required List<BillingProfile> profiles,
+  required List<BillingRule> rules,
+  List<String> productTags = const [],
+}) {
+  final tags = productTags.map((t) => t.toLowerCase().trim()).toSet();
+  final sorted = [...rules]..sort((a, b) => a.priority.compareTo(b.priority));
+  for (final r in sorted) {
+    if (r.triggerType == 'always') {
+      final p = profiles.where((p) => p.id == r.billingProfileId);
+      if (p.isNotEmpty) return p.first;
+    } else if (r.triggerType == 'productTag') {
+      if (r.value.isNotEmpty && tags.contains(r.value.toLowerCase())) {
+        final p = profiles.where((p) => p.id == r.billingProfileId);
+        if (p.isNotEmpty) return p.first;
+      }
+    }
+  }
+  final def = profiles.where((p) => p.isDefault);
+  if (def.isNotEmpty) return def.first;
+  return profiles.isNotEmpty ? profiles.first : null;
+}
+
 /// =======================
-/// Edit Screen (save→close, delete, logo upload)
+/// Edit Screen
 /// =======================
 class ClientEditScreen extends StatefulWidget {
   final String? clientId;
@@ -188,7 +719,7 @@ class _ClientEditScreenState extends State<ClientEditScreen> {
   bool _saving = false;
   Client _client = Client();
 
-  // Logo selection
+  // Logo
   Uint8List? _newLogoBytes;
   String? _newLogoPath;
   bool _logoBusy = false;
@@ -228,6 +759,13 @@ class _ClientEditScreenState extends State<ClientEditScreen> {
 
   bool _prepay = false, _creditHold = false;
   String _alertLevel = 'none';
+
+  List<BillingProfile> _billingProfiles = <BillingProfile>[];
+  List<BillingRule> _billingRules = <BillingRule>[];
+  String? _defaultProfileId;
+
+  // NEW: contact points
+  List<ClientContactPoint> _contactPoints = <ClientContactPoint>[];
 
   @override
   void initState() {
@@ -320,6 +858,34 @@ class _ClientEditScreenState extends State<ClientEditScreen> {
       _prepay = _client.prepayRequired;
       _creditHold = _client.creditHold;
       _alertLevel = _client.alertLevel;
+
+      _billingProfiles = [..._client.billingProfiles];
+      _billingRules = [..._client.billingRules]
+        ..sort((a, b) => a.priority.compareTo(b.priority));
+      _defaultProfileId = _billingProfiles
+          .firstWhere(
+            (p) => p.isDefault,
+            orElse: () => (_billingProfiles.isNotEmpty
+                ? _billingProfiles.first
+                : BillingProfile()),
+          )
+          .id;
+
+      _contactPoints = [..._client.contactPoints];
+      // ensure single primary per type
+      for (final t in ['work_phone', 'mobile', 'email']) {
+        final prims = _contactPoints.where((c) => c.type == t && c.primary);
+        if (prims.length > 1) {
+          bool keep = true;
+          for (final c in prims) {
+            if (keep) {
+              keep = false;
+            } else {
+              c.primary = false;
+            }
+          }
+        }
+      }
     });
   }
 
@@ -343,25 +909,13 @@ class _ClientEditScreenState extends State<ClientEditScreen> {
     try {
       if (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS) {
-        final source = await showModalBottomSheet<ImageSource>(
-          context: context,
-          builder: (_) => SafeArea(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              ListTile(
-                  leading: const Icon(Icons.photo_camera),
-                  title: const Text('Camera'),
-                  onTap: () => Navigator.pop(context, ImageSource.camera)),
-              ListTile(
-                  leading: const Icon(Icons.photo),
-                  title: const Text('Gallery'),
-                  onTap: () => Navigator.pop(context, ImageSource.gallery)),
-            ]),
-          ),
-        );
-        if (source == null) return;
+        // Simple picker; you can swap to your SafeImagePicker if desired.
         final picker = ImagePicker();
         final x = await picker.pickImage(
-            source: source, maxWidth: 1200, maxHeight: 1200, imageQuality: 85);
+            source: ImageSource.gallery,
+            maxWidth: 1200,
+            maxHeight: 1200,
+            imageQuality: 85);
         if (x == null) return;
         final bytes = await x.readAsBytes();
         setState(() {
@@ -385,58 +939,67 @@ class _ClientEditScreenState extends State<ClientEditScreen> {
     }
   }
 
-  Future<String?> _uploadLogo(String docId) async {
-    if (_newLogoBytes == null && _newLogoPath == null) return null;
-    setState(() => _logoBusy = true);
+  Future<String?> _uploadLogoSilently({
+    required String docId,
+    Uint8List? bytes,
+    String? path,
+  }) async {
     try {
+      if (bytes == null && (path == null || kIsWeb)) return null;
       final ref = FirebaseStorage.instance
           .ref()
           .child('client_logos')
           .child('$docId.jpg');
-      if (_newLogoBytes != null) {
-        await ref.putData(
-            _newLogoBytes!, SettableMetadata(contentType: 'image/jpeg'));
-      } else if (!kIsWeb && _newLogoPath != null) {
-        await ref.putFile(io.File(_newLogoPath!));
+      if (bytes != null) {
+        await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
       } else {
-        return null;
+        await ref.putFile(io.File(path!));
       }
       return await ref.getDownloadURL();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Upload failed: $e')));
-      }
+    } catch (_) {
       return null;
-    } finally {
-      if (mounted) setState(() => _logoBusy = false);
     }
   }
 
   Future<void> _removeLogo() async {
-    if (widget.clientId == null) {
+    if (_newLogoBytes != null || _newLogoPath != null) {
       setState(() {
         _newLogoBytes = null;
         _newLogoPath = null;
       });
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(const SnackBar(content: Text('Logo cleared')));
       return;
     }
-    if (_client.logoUrl.isEmpty) return;
+    if (widget.clientId == null || _client.logoUrl.isEmpty) return;
+
     try {
-      await FirebaseStorage.instance.refFromURL(_client.logoUrl).delete();
+      try {
+        await FirebaseStorage.instance.refFromURL(_client.logoUrl).delete();
+      } catch (_) {}
       await FirebaseFirestore.instance
           .collection('clients')
           .doc(widget.clientId!)
           .update({'logoUrl': ''});
       if (!mounted) return;
       setState(() => _client.logoUrl = '');
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Logo removed')));
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(const SnackBar(content: Text('Logo removed')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to remove logo: $e')));
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(SnackBar(content: Text('Failed to remove logo: $e')));
     }
+  }
+
+  void _popNextFrame(Map<String, dynamic> result) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final rootNav = Navigator.of(context, rootNavigator: true);
+      if (rootNav.canPop()) {
+        rootNav.pop(result);
+      }
+    });
   }
 
   Future<void> _save() async {
@@ -459,95 +1022,96 @@ class _ClientEditScreenState extends State<ClientEditScreen> {
       return;
     }
 
-    setState(() => _saving = true);
-    final isNew = widget.clientId == null;
-
-    try {
-      final payload = Client(
-        id: widget.clientId ?? '',
-        displayName: _display.text.trim(),
-        legalName: _legal.text.trim(),
-        taxId: _taxId.text.trim(),
-        currency: _currency.text.trim().isEmpty ? 'CAD' : _currency.text.trim(),
-        paymentTermsDays: int.tryParse(_terms.text.trim()) ?? 30,
-        creditLimit: _creditLimit.text.trim().isEmpty
-            ? null
-            : num.tryParse(_creditLimit.text.trim()),
-        prepayRequired: _prepay,
-        creditHold: _creditHold,
-        alertLevel: _alertLevel,
-        alertNotes: _alertNotes.text.trim(),
-        mailingAddress: Address(
-          line1: _mail1.text,
-          line2: _mail2.text,
-          city: _mailCity.text,
-          region: _mailRegion.text,
-          postalCode: _mailPostal.text,
-          country: _mailCountry.text.isNotEmpty ? _mailCountry.text : 'CA',
-        ),
-        billingAddress: Address(
-          line1: _bill1.text,
-          line2: _bill2.text,
-          city: _billCity.text,
-          region: _billRegion.text,
-          postalCode: _billPostal.text,
-          country: _billCountry.text.isNotEmpty ? _billCountry.text : 'CA',
-        ),
-        primaryContact: Contact(
-            name: _pName.text, email: _pEmail.text, phone: _pPhone.text),
-        billingContact: Contact(
-            name: _bName.text, email: _bEmail.text, phone: _bPhone.text),
-        dispatchEmail: _dispatchEmail.text.trim(),
-        invoiceEmail: _invoiceEmail.text.trim(),
-        notes: _notes.text.trim(),
-        logoUrl: _client.logoUrl,
-      );
-
-      final ref = FirebaseFirestore.instance.collection('clients');
-      String docId;
-      if (isNew) {
-        final added = await ref.add(payload.toMap());
-        docId = added.id;
-      } else {
-        docId = widget.clientId!;
-        await ref.doc(docId).update(payload.toMap());
-      }
-
-      final newUrl = await _uploadLogo(docId);
-      if (newUrl != null) {
-        await ref.doc(docId).update({'logoUrl': newUrl});
-      }
-
-      if (!mounted) return;
-      setState(() => _saving = false);
-
-      // ---------- CLOSE THE PAGE (and report action) ----------
-      final result = {
-        'action': isNew ? 'created' : 'updated',
-        'name': _display.text.trim(),
-      };
-
-      if (Navigator.canPop(context)) {
-        Navigator.pop(context, result);
-      } else {
-        // Rare: if this screen is the first route, replace with list.
-        await Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const ClientListScreen()),
-        );
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          final msg = isNew
-              ? 'Saved "${_display.text.trim()}"'
-              : 'Updated "${_display.text.trim()}"';
-          ScaffoldMessenger.maybeOf(context)
-              ?.showSnackBar(SnackBar(content: Text(msg)));
-        });
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _saving = false);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Save failed: $e')));
+    // ensure single default profile flag matches _defaultProfileId
+    for (final p in _billingProfiles) {
+      p.isDefault = (p.id == _defaultProfileId);
     }
+    if (_billingProfiles.isNotEmpty &&
+        !_billingProfiles.any((p) => p.isDefault)) {
+      _billingProfiles.first.isDefault = true;
+      _defaultProfileId = _billingProfiles.first.id;
+    }
+
+    final isNew = widget.clientId == null;
+    final existingId = widget.clientId;
+    final logoBytes = _newLogoBytes;
+    final logoPath = _newLogoPath;
+
+    final payload = Client(
+      id: existingId ?? '',
+      displayName: _display.text.trim(),
+      legalName: _legal.text.trim(),
+      taxId: _taxId.text.trim(),
+      currency: _currency.text.trim().isEmpty ? 'CAD' : _currency.text.trim(),
+      paymentTermsDays: int.tryParse(_terms.text.trim()) ?? 30,
+      creditLimit: _creditLimit.text.trim().isEmpty
+          ? null
+          : num.tryParse(_creditLimit.text.trim()),
+      prepayRequired: _prepay,
+      creditHold: _creditHold,
+      alertLevel: _alertLevel,
+      alertNotes: _alertNotes.text.trim(),
+      mailingAddress: Address(
+        line1: _mail1.text,
+        line2: _mail2.text,
+        city: _mailCity.text,
+        region: _mailRegion.text,
+        postalCode: _mailPostal.text,
+        country: _mailCountry.text.isNotEmpty ? _mailCountry.text : 'CA',
+      ),
+      billingAddress: Address(
+        line1: _bill1.text,
+        line2: _bill2.text,
+        city: _billCity.text,
+        region: _billRegion.text,
+        postalCode: _billPostal.text,
+        country: _billCountry.text.isNotEmpty ? _billCountry.text : 'CA',
+      ),
+      primaryContact:
+          Contact(name: _pName.text, email: _pEmail.text, phone: _pPhone.text),
+      billingContact:
+          Contact(name: _bName.text, email: _bEmail.text, phone: _bPhone.text),
+      dispatchEmail: _dispatchEmail.text.trim(),
+      invoiceEmail: _invoiceEmail.text.trim(),
+      notes: _notes.text.trim(),
+      logoUrl: _client.logoUrl,
+      billingProfiles: _billingProfiles,
+      billingRules: _billingRules
+        ..sort((a, b) => a.priority.compareTo(b.priority)),
+      contactPoints: _contactPoints,
+    );
+
+    setState(() => _saving = true);
+
+    // Close immediately (list will toast)
+    final result = {
+      'action': isNew ? 'created' : 'updated',
+      'name': _display.text.trim(),
+    };
+    _popNextFrame(result);
+
+    () async {
+      try {
+        final ref = FirebaseFirestore.instance.collection('clients');
+        String docId;
+        if (isNew) {
+          final added = await ref.add(payload.toMap());
+          docId = added.id;
+        } else {
+          docId = existingId!;
+          await ref.doc(docId).update(payload.toMap());
+        }
+
+        final newUrl = await _uploadLogoSilently(
+          docId: docId,
+          bytes: logoBytes,
+          path: logoPath,
+        );
+        if (newUrl != null) {
+          await ref.doc(docId).update({'logoUrl': newUrl});
+        }
+      } catch (_) {}
+    }();
   }
 
   Future<void> _confirmDelete() async {
@@ -583,8 +1147,7 @@ class _ClientEditScreenState extends State<ClientEditScreen> {
           .collection('clients')
           .doc(widget.clientId!)
           .delete();
-      if (!mounted) return;
-      Navigator.pop(context, {'action': 'deleted', 'name': name});
+      _popNextFrame({'action': 'deleted', 'name': name});
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
@@ -670,6 +1233,7 @@ class _ClientEditScreenState extends State<ClientEditScreen> {
                 ),
                 const SizedBox(height: 16),
 
+                // Core info
                 TextFormField(
                   controller: _display,
                   focusNode: _displayFocus,
@@ -712,7 +1276,9 @@ class _ClientEditScreenState extends State<ClientEditScreen> {
                   const SizedBox(width: 8),
                   Expanded(
                       child: DropdownButtonFormField<String>(
-                    value: _alertLevel,
+                    value: const ['none', 'warn', 'red'].contains(_alertLevel)
+                        ? _alertLevel
+                        : 'none',
                     items: const [
                       DropdownMenuItem(
                           value: 'none', child: Text('Alert: none')),
@@ -758,74 +1324,232 @@ class _ClientEditScreenState extends State<ClientEditScreen> {
                 _addrBlock('Billing Address', _bill1, _bill2, _billCity,
                     _billRegion, _billPostal, _billCountry),
 
+                // ========= Contacts (Division / Person / Channels) =========
                 const Divider(height: 24),
-                Row(children: [
-                  Expanded(
-                      child: TextFormField(
-                          controller: _pName,
-                          decoration: _dec('Primary Contact Name'))),
-                  const SizedBox(width: 8),
-                  Expanded(
-                      child: TextFormField(
-                    controller: _pPhone,
-                    keyboardType: TextInputType.phone,
-                    decoration: _dec(
-                        'Primary Phone',
-                        null,
-                        IconButton(
-                            icon: const Icon(Icons.call),
-                            onPressed: () =>
-                                _callNumber(context, _pPhone.text))),
-                  )),
-                ]),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Contacts (by Division)',
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
+                ),
                 const SizedBox(height: 8),
-                TextFormField(
-                    controller: _pEmail,
-                    decoration: _dec('Primary Email'),
-                    validator: _emailOk),
+                Column(
+                  children: [
+                    if (_contactPoints.isEmpty)
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text('No contacts added yet.'),
+                      ),
+                    for (int i = 0; i < _contactPoints.length; i++)
+                      Card(
+                        child: ListTile(
+                          leading: Icon(
+                            _contactPoints[i].type == 'email'
+                                ? Icons.email_outlined
+                                : Icons.call_outlined,
+                          ),
+                          title: Text(
+                            _cpPretty(_contactPoints[i]),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            '${_contactPoints[i].type}'
+                            '${_contactPoints[i].primary ? ' • primary' : ''}',
+                          ),
+                          trailing: Wrap(
+                            spacing: 4,
+                            children: [
+                              // Quick actions per contact
+                              if (_contactPoints[i].type == 'email')
+                                IconButton(
+                                  tooltip: 'Email',
+                                  icon: const Icon(Icons.email_outlined),
+                                  onPressed: () => _composeEmail(
+                                      context, _contactPoints[i].value),
+                                ),
+                              if (_contactPoints[i].type == 'work_phone' ||
+                                  _contactPoints[i].type == 'mobile')
+                                IconButton(
+                                  tooltip: 'Call',
+                                  icon: const Icon(Icons.call),
+                                  onPressed: () => _callNumber(
+                                      context, _contactPoints[i].value),
+                                ),
+                              if (_contactPoints[i].type == 'mobile')
+                                IconButton(
+                                  tooltip: 'Text',
+                                  icon: const Icon(Icons.sms_outlined),
+                                  onPressed: () => _sendSms(
+                                      context, _contactPoints[i].value),
+                                ),
+                              IconButton(
+                                tooltip: 'Edit',
+                                icon: const Icon(Icons.edit),
+                                onPressed: () => _openContactPointDialog(
+                                    index: i, existing: _contactPoints[i]),
+                              ),
+                              IconButton(
+                                tooltip: 'Delete',
+                                icon: const Icon(Icons.delete_outline),
+                                onPressed: () =>
+                                    setState(() => _contactPoints.removeAt(i)),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: () => _openContactPointDialog(),
+                        icon: const Icon(Icons.add_ic_call),
+                        label: const Text('Add Contact'),
+                      ),
+                    ),
+                  ],
+                ),
 
-                const SizedBox(height: 16),
-                Row(children: [
-                  Expanded(
-                      child: TextFormField(
-                          controller: _bName,
-                          decoration: _dec('Billing Contact Name'))),
-                  const SizedBox(width: 8),
-                  Expanded(
-                      child: TextFormField(
-                    controller: _bPhone,
-                    keyboardType: TextInputType.phone,
-                    decoration: _dec(
-                        'Billing Phone',
-                        null,
-                        IconButton(
-                            icon: const Icon(Icons.call),
-                            onPressed: () =>
-                                _callNumber(context, _bPhone.text))),
-                  )),
-                ]),
+                // ========= Billing Profiles =========
+                const Divider(height: 24),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Billing Profiles',
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
+                ),
                 const SizedBox(height: 8),
-                TextFormField(
-                    controller: _bEmail,
-                    decoration: _dec('Billing Email'),
-                    validator: _emailOk),
+                Column(
+                  children: [
+                    for (final p in _billingProfiles)
+                      Card(
+                        child: RadioListTile<String>(
+                          value: p.id,
+                          groupValue: _defaultProfileId,
+                          onChanged: (id) {
+                            setState(() {
+                              _defaultProfileId = id;
+                              for (var x in _billingProfiles) {
+                                x.isDefault = (x.id == id);
+                              }
+                            });
+                          },
+                          title: Text(
+                              (p.name.isEmpty ? p.billToName : p.name).isEmpty
+                                  ? 'Profile'
+                                  : (p.name.isEmpty ? p.billToName : p.name)),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (p.billToName.isNotEmpty)
+                                Text(p.billToName,
+                                    style:
+                                        const TextStyle(color: Colors.black54)),
+                              if (p.arEmails.isNotEmpty)
+                                Text(p.arEmails.join(', '),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis),
+                            ],
+                          ),
+                          secondary: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                tooltip: 'Edit',
+                                icon: const Icon(Icons.edit),
+                                onPressed: () => _openProfileDialog(
+                                    index: _billingProfiles.indexOf(p),
+                                    existing: p),
+                              ),
+                              IconButton(
+                                tooltip: 'Delete',
+                                icon: const Icon(Icons.delete_outline),
+                                onPressed: () {
+                                  setState(() {
+                                    final idx = _billingProfiles.indexOf(p);
+                                    _billingProfiles.removeAt(idx);
+                                    if (_billingProfiles.isEmpty) {
+                                      _defaultProfileId = null;
+                                    } else if (_defaultProfileId == p.id) {
+                                      _billingProfiles.first.isDefault = true;
+                                      _defaultProfileId =
+                                          _billingProfiles.first.id;
+                                    }
+                                  });
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: () => _openProfileDialog(),
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add Billing Profile'),
+                      ),
+                    ),
+                  ],
+                ),
 
+                // ========= Billing Rules =========
                 const SizedBox(height: 16),
-                TextFormField(
-                    controller: _dispatchEmail,
-                    decoration: _dec('Dispatch Email'),
-                    validator: _emailOk),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Billing Rules',
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
+                ),
                 const SizedBox(height: 8),
-                TextFormField(
-                    controller: _invoiceEmail,
-                    decoration: _dec('Invoice Email (AR inbox)'),
-                    validator: _emailOk),
-
-                const SizedBox(height: 16),
-                TextFormField(
-                    controller: _notes,
-                    maxLines: 4,
-                    decoration: _dec('Internal Notes / Special instructions')),
+                Column(
+                  children: [
+                    for (final r in _billingRules)
+                      ListTile(
+                        leading: const Icon(Icons.rule),
+                        title: Text(r.label.isEmpty ? 'Rule' : r.label),
+                        subtitle: Text(
+                          'When: ${r.triggerType}'
+                          '${r.triggerType == 'productTag' && r.value.isNotEmpty ? '="${r.value}"' : ''} • '
+                          'Then: ${_billingProfiles.firstWhere(
+                                (p) => p.id == r.billingProfileId,
+                                orElse: () => BillingProfile(name: 'Unknown'),
+                              ).name.isEmpty ? _billingProfiles.firstWhere(
+                                (p) => p.id == r.billingProfileId,
+                                orElse: () =>
+                                    BillingProfile(billToName: 'Unknown'),
+                              ).billToName : _billingProfiles.firstWhere(
+                                (p) => p.id == r.billingProfileId,
+                                orElse: () => BillingProfile(name: 'Unknown'),
+                              ).name} • Priority: ${r.priority}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        trailing: Wrap(
+                          spacing: 4,
+                          children: [
+                            IconButton(
+                              tooltip: 'Edit rule',
+                              icon: const Icon(Icons.edit),
+                              onPressed: () => _openRuleDialog(
+                                  index: _billingRules.indexOf(r), existing: r),
+                            ),
+                            IconButton(
+                              tooltip: 'Delete rule',
+                              icon: const Icon(Icons.delete_outline),
+                              onPressed: () => setState(() => _billingRules
+                                  .removeWhere((x) => x.id == r.id)),
+                            ),
+                          ],
+                        ),
+                      ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: () => _openRuleDialog(),
+                        icon: const Icon(Icons.add_task),
+                        label: const Text('Add Billing Rule'),
+                      ),
+                    ),
+                  ],
+                ),
 
                 const SizedBox(height: 24),
                 FilledButton.icon(
@@ -905,10 +1629,428 @@ class _ClientEditScreenState extends State<ClientEditScreen> {
       ],
     );
   }
+
+  // ===== Dialogs =====
+
+  Future<void> _openProfileDialog(
+      {int? index, BillingProfile? existing}) async {
+    final isEdit = index != null && existing != null;
+
+    final name = TextEditingController(text: existing?.name ?? '');
+    final billToName = TextEditingController(text: existing?.billToName ?? '');
+    final line1 = TextEditingController(text: existing?.address.line1 ?? '');
+    final line2 = TextEditingController(text: existing?.address.line2 ?? '');
+    final city = TextEditingController(text: existing?.address.city ?? '');
+    final region = TextEditingController(text: existing?.address.region ?? '');
+    final postal =
+        TextEditingController(text: existing?.address.postalCode ?? '');
+    final country =
+        TextEditingController(text: existing?.address.country ?? 'CA');
+    final ar =
+        TextEditingController(text: (existing?.arEmails ?? []).join(', '));
+    final cc =
+        TextEditingController(text: (existing?.ccEmails ?? []).join(', '));
+    final terms = TextEditingController(
+        text: (existing?.paymentTermsDays ?? 30).toString());
+    bool poRequired = existing?.poRequired ?? false;
+    bool isDefault = existing?.isDefault ?? false;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: Text(isEdit ? 'Edit Billing Profile' : 'New Billing Profile'),
+          content: SizedBox(
+            width: 620,
+            child: SingleChildScrollView(
+              child: Column(
+                children: [
+                  TextField(
+                      controller: name,
+                      decoration:
+                          const InputDecoration(labelText: 'Profile Name *')),
+                  const SizedBox(height: 8),
+                  TextField(
+                      controller: billToName,
+                      decoration:
+                          const InputDecoration(labelText: 'Bill To Name *')),
+                  const SizedBox(height: 8),
+                  TextField(
+                      controller: line1,
+                      decoration:
+                          const InputDecoration(labelText: 'Address Line 1')),
+                  const SizedBox(height: 8),
+                  TextField(
+                      controller: line2,
+                      decoration:
+                          const InputDecoration(labelText: 'Address Line 2')),
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    Expanded(
+                        child: TextField(
+                            controller: city,
+                            decoration:
+                                const InputDecoration(labelText: 'City'))),
+                    const SizedBox(width: 8),
+                    Expanded(
+                        child: TextField(
+                            controller: region,
+                            decoration: const InputDecoration(
+                                labelText: 'Province/State'))),
+                  ]),
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    Expanded(
+                        child: TextField(
+                            controller: postal,
+                            decoration: const InputDecoration(
+                                labelText: 'Postal/ZIP'))),
+                    const SizedBox(width: 8),
+                    Expanded(
+                        child: TextField(
+                            controller: country,
+                            decoration:
+                                const InputDecoration(labelText: 'Country'))),
+                  ]),
+                  const SizedBox(height: 8),
+                  TextField(
+                      controller: ar,
+                      decoration: const InputDecoration(
+                          labelText: 'A/R Emails (comma separated)')),
+                  const SizedBox(height: 8),
+                  TextField(
+                      controller: cc,
+                      decoration: const InputDecoration(
+                          labelText: 'CC Emails (comma separated)')),
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    Expanded(
+                        child: TextField(
+                            controller: terms,
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                                labelText: 'Payment Terms (days)'))),
+                    const SizedBox(width: 8),
+                    Expanded(
+                        child: SwitchListTile(
+                      value: poRequired,
+                      onChanged: (v) => setLocal(() => poRequired = v),
+                      title: const Text('PO Required'),
+                    )),
+                  ]),
+                  SwitchListTile(
+                    value: isDefault,
+                    onChanged: (v) => setLocal(() => isDefault = v),
+                    title: const Text('Default profile'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: Text(isEdit ? 'Save' : 'Add')),
+          ],
+        ),
+      ),
+    );
+
+    if (ok == true) {
+      final p = BillingProfile(
+        id: existing?.id,
+        name: name.text.trim(),
+        billToName: billToName.text.trim(),
+        address: Address(
+          line1: line1.text.trim(),
+          line2: line2.text.trim(),
+          city: city.text.trim(),
+          region: region.text.trim(),
+          postalCode: postal.text.trim(),
+          country: country.text.trim().isEmpty ? 'CA' : country.text.trim(),
+        ),
+        arEmails: ar.text
+            .split(',')
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toList(),
+        ccEmails: cc.text
+            .split(',')
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toList(),
+        paymentTermsDays: int.tryParse(terms.text.trim()) ?? 30,
+        poRequired: poRequired,
+        isDefault: isDefault,
+      );
+
+      setState(() {
+        if (p.isDefault) {
+          for (var x in _billingProfiles) {
+            x.isDefault = false;
+          }
+          _defaultProfileId = p.id;
+        }
+        if (isEdit) {
+          _billingProfiles[index!] = p;
+          if (p.isDefault) _defaultProfileId = p.id;
+        } else {
+          _billingProfiles.add(p);
+          if (_defaultProfileId == null || p.isDefault) {
+            for (var x in _billingProfiles) {
+              x.isDefault = false;
+            }
+            _billingProfiles.last.isDefault = true;
+            _defaultProfileId = _billingProfiles.last.id;
+          }
+        }
+      });
+    }
+  }
+
+  Future<void> _openRuleDialog({int? index, BillingRule? existing}) async {
+    if (_billingProfiles.isEmpty) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+            content: Text('Add at least one Billing Profile first.')),
+      );
+      return;
+    }
+
+    final isEdit = index != null && existing != null;
+
+    String label = existing?.label ?? '';
+    String triggerType = existing?.triggerType ?? 'productTag';
+    final valueCtrl = TextEditingController(text: existing?.value ?? '');
+    String billingProfileId =
+        existing?.billingProfileId ?? _billingProfiles.first.id;
+    final priorityCtrl =
+        TextEditingController(text: (existing?.priority ?? 100).toString());
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: Text(isEdit ? 'Edit Billing Rule' : 'New Billing Rule'),
+          content: SizedBox(
+            width: 560,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: TextEditingController(text: label),
+                  onChanged: (v) => label = v,
+                  decoration: const InputDecoration(labelText: 'Label'),
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  value: ['productTag', 'always'].contains(triggerType)
+                      ? triggerType
+                      : 'productTag',
+                  items: const [
+                    DropdownMenuItem(
+                        value: 'productTag',
+                        child: Text('When product tag equals…')),
+                    DropdownMenuItem(
+                        value: 'always', child: Text('Always (catch-all)')),
+                  ],
+                  onChanged: (v) =>
+                      setLocal(() => triggerType = v ?? 'productTag'),
+                  decoration: const InputDecoration(labelText: 'Trigger'),
+                ),
+                const SizedBox(height: 8),
+                if (triggerType == 'productTag')
+                  TextField(
+                    controller: valueCtrl,
+                    decoration: const InputDecoration(
+                        labelText: 'Product Tag (e.g., chemicals, steel)'),
+                  ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  value: _billingProfiles.any((p) => p.id == billingProfileId)
+                      ? billingProfileId
+                      : _billingProfiles.first.id,
+                  items: _billingProfiles
+                      .map((p) => DropdownMenuItem(
+                            value: p.id,
+                            child: Text(p.name.isEmpty
+                                ? (p.billToName.isEmpty
+                                    ? 'Profile'
+                                    : p.billToName)
+                                : p.name),
+                          ))
+                      .toList(),
+                  onChanged: (v) =>
+                      setLocal(() => billingProfileId = v ?? billingProfileId),
+                  decoration:
+                      const InputDecoration(labelText: 'Bill using profile'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: priorityCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                      labelText: 'Priority (lower runs first)'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: Text(isEdit ? 'Save' : 'Add')),
+          ],
+        ),
+      ),
+    );
+
+    if (ok == true) {
+      final rule = BillingRule(
+        id: existing?.id,
+        label: label.trim().isEmpty
+            ? (triggerType == 'always'
+                ? 'Always'
+                : 'Tag: ${valueCtrl.text.trim()}')
+            : label.trim(),
+        triggerType: triggerType,
+        value: triggerType == 'productTag'
+            ? valueCtrl.text.trim().toLowerCase()
+            : '',
+        billingProfileId: billingProfileId,
+        priority: int.tryParse(priorityCtrl.text.trim()) ?? 100,
+      );
+
+      setState(() {
+        if (isEdit) {
+          _billingRules[index!] = rule;
+        } else {
+          _billingRules.add(rule);
+        }
+        _billingRules.sort((a, b) => a.priority.compareTo(b.priority));
+      });
+    }
+  }
+
+  Future<void> _openContactPointDialog(
+      {int? index, ClientContactPoint? existing}) async {
+    final isEdit = index != null && existing != null;
+    String type = existing?.type ?? 'work_phone';
+    final division = TextEditingController(text: existing?.division ?? '');
+    final person = TextEditingController(text: existing?.person ?? '');
+    final value = TextEditingController(text: existing?.value ?? '');
+    final ext = TextEditingController(text: existing?.ext ?? '');
+    bool primary = existing?.primary ?? false;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: Text(isEdit ? 'Edit Contact' : 'Add Contact'),
+          content: SizedBox(
+            width: 560,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<String>(
+                  value: ['work_phone', 'mobile', 'email'].contains(type)
+                      ? type
+                      : 'work_phone',
+                  items: const [
+                    DropdownMenuItem(
+                        value: 'work_phone', child: Text('Work Phone')),
+                    DropdownMenuItem(value: 'mobile', child: Text('Mobile')),
+                    DropdownMenuItem(value: 'email', child: Text('Email')),
+                  ],
+                  onChanged: (v) => setLocal(() => type = v ?? 'work_phone'),
+                  decoration: const InputDecoration(labelText: 'Type'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                    controller: division,
+                    decoration: const InputDecoration(
+                        labelText: 'Division (Dispatch, Shipping, etc.)')),
+                const SizedBox(height: 8),
+                TextField(
+                    controller: person,
+                    decoration:
+                        const InputDecoration(labelText: 'Person to talk to')),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: value,
+                  decoration: InputDecoration(
+                    labelText: type == 'email'
+                        ? 'Email'
+                        : (type == 'mobile' ? 'Mobile Number' : 'Work Phone'),
+                  ),
+                  keyboardType: type == 'email'
+                      ? TextInputType.emailAddress
+                      : TextInputType.phone,
+                ),
+                if (type == 'work_phone') ...[
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: ext,
+                    decoration: const InputDecoration(
+                        labelText: 'Extension (optional)'),
+                    keyboardType: TextInputType.number,
+                  ),
+                ],
+                SwitchListTile(
+                  value: primary,
+                  onChanged: (v) => setLocal(() => primary = v),
+                  title: const Text('Set as primary for this type'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: Text(isEdit ? 'Save' : 'Add')),
+          ],
+        ),
+      ),
+    );
+
+    if (ok == true) {
+      if (primary) {
+        for (final c in _contactPoints) {
+          if (c.type == type) c.primary = false;
+        }
+      }
+
+      final cp = ClientContactPoint(
+        id: existing?.id,
+        division: division.text.trim(),
+        person: person.text.trim(),
+        type: type,
+        value: value.text.trim(),
+        ext: type == 'work_phone' ? ext.text.trim() : '',
+        primary: primary,
+      );
+
+      setState(() {
+        if (isEdit) {
+          _contactPoints[index!] = cp;
+        } else {
+          _contactPoints.add(cp);
+        }
+      });
+    }
+  }
 }
 
 /// =======================
-/// List Screen (awaits result → toast) + Edit + Call + Logo
+/// List Screen
 /// =======================
 class ClientListScreen extends StatelessWidget {
   const ClientListScreen({super.key});
@@ -978,14 +2120,35 @@ class ClientListScreen extends StatelessWidget {
             separatorBuilder: (_, __) => const Divider(height: 1),
             itemBuilder: (_, i) {
               final cl = docs[i];
-              final phone = cl.primaryContact.phone.isNotEmpty
-                  ? cl.primaryContact.phone
-                  : cl.billingContact.phone;
+
+              final bestPhone = _bestPhone(cl.contactPoints);
+              final phone = (bestPhone?.value ?? '').isNotEmpty
+                  ? bestPhone!.value
+                  : (cl.primaryContact.phone.isNotEmpty
+                      ? cl.primaryContact.phone
+                      : cl.billingContact.phone);
+
+              final bestMobile = _bestMobile(cl.contactPoints);
+              final mobile = (bestMobile?.value ?? '');
+
+              final emCP = _bestEmail(cl.contactPoints);
+              final emailForSubtitle = (emCP?.value ?? '').isNotEmpty
+                  ? emCP!.value
+                  : (cl.billingContact.email.isNotEmpty
+                      ? cl.billingContact.email
+                      : cl.primaryContact.email);
+
+              final divisions = _topDivisions(cl.contactPoints, max: 3);
+
               final alertIcon = cl.alertLevel == 'red'
                   ? const Icon(Icons.warning, color: Colors.red)
                   : cl.alertLevel == 'warn'
                       ? const Icon(Icons.warning, color: Colors.orange)
                       : null;
+
+              final subtitleText = emailForSubtitle.isNotEmpty
+                  ? emailForSubtitle
+                  : (bestPhone != null ? _cpPretty(bestPhone) : '');
 
               return ListTile(
                 leading: CircleAvatar(
@@ -997,23 +2160,39 @@ class ClientListScreen extends StatelessWidget {
                       : const Icon(Icons.apartment),
                 ),
                 title: Text(cl.displayName),
-                subtitle: Text(
-                  cl.billingContact.email.isNotEmpty
-                      ? cl.billingContact.email
-                      : cl.primaryContact.email,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(subtitleText,
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                    if (divisions.isNotEmpty)
+                      Wrap(children: divisions.map(_divBadge).toList()),
+                  ],
                 ),
                 trailing: Wrap(
                   spacing: 4,
                   children: [
                     if (alertIcon != null) alertIcon,
                     IconButton(
+                      tooltip: emailForSubtitle.isEmpty ? 'No email' : 'Email',
+                      icon: const Icon(Icons.email_outlined),
+                      onPressed: emailForSubtitle.isEmpty
+                          ? null
+                          : () => _composeEmail(context, emailForSubtitle),
+                    ),
+                    IconButton(
                       tooltip: phone.isEmpty ? 'No phone' : 'Call',
                       icon: const Icon(Icons.call),
                       onPressed: phone.isEmpty
                           ? null
                           : () => _callNumber(context, phone),
+                    ),
+                    IconButton(
+                      tooltip: mobile.isEmpty ? 'No mobile' : 'Text',
+                      icon: const Icon(Icons.sms_outlined),
+                      onPressed: mobile.isEmpty
+                          ? null
+                          : () => _sendSms(context, mobile),
                     ),
                     IconButton(
                       tooltip: 'Edit',

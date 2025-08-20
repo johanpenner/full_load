@@ -1,0 +1,1089 @@
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:http/http.dart' as http;
+
+/// TODO: Replace with your Google Distance Matrix API key.
+const String kGoogleMapsApiKey = 'PASTE_YOUR_REAL_KEY_HERE';
+
+class QuickLoadScreen extends StatefulWidget {
+  const QuickLoadScreen({super.key});
+
+  @override
+  State<QuickLoadScreen> createState() => _QuickLoadScreenState();
+}
+
+class _QuickLoadScreenState extends State<QuickLoadScreen> {
+  // Core parties & addresses
+  final _clientCtrl = TextEditingController();
+  final _shipperCtrl = TextEditingController();
+  final _shipperAddrCtrl = TextEditingController();
+  final _receiverCtrl = TextEditingController();
+  final _receiverAddrCtrl = TextEditingController();
+
+  // Same-as toggles
+  bool _pickupSameAsShipper = true;
+  bool _deliverySameAsReceiver = true;
+
+  // IDs / refs
+  final _shippingNumCtrl = TextEditingController();
+  final _poNumCtrl = TextEditingController();
+  final _loadNumCtrl = TextEditingController();
+  final _projectNumCtrl = TextEditingController();
+
+  // Notes
+  final _notesCtrl = TextEditingController();
+
+  // Start origin & units
+  StartOrigin _startOrigin = StartOrigin.liveTruck;
+  final _customStartCtrl = TextEditingController();
+  bool _useMetric = true; // true=km, false=mi
+
+  // Driver / Truck
+  String? _selectedDriverId;
+  String? _selectedTruckId;
+
+  // Pricing
+  RateMode _rateMode = RateMode.perDistance;
+  final _ratePerUnitCtrl = TextEditingController(); // price per km/mi
+  final _flatRateCtrl = TextEditingController(); // price per load
+  double? _estimatedTotal; // computed from distance
+
+  // Distance results
+  DistanceResult? _truckToPickup;
+  DistanceResult? _pickupToDelivery;
+
+  bool _saving = false;
+  bool _calculating = false;
+
+  @override
+  void dispose() {
+    _clientCtrl.dispose();
+    _shipperCtrl.dispose();
+    _shipperAddrCtrl.dispose();
+    _receiverCtrl.dispose();
+    _receiverAddrCtrl.dispose();
+    _shippingNumCtrl.dispose();
+    _poNumCtrl.dispose();
+    _loadNumCtrl.dispose();
+    _projectNumCtrl.dispose();
+    _notesCtrl.dispose();
+    _customStartCtrl.dispose();
+    _ratePerUnitCtrl.dispose();
+    _flatRateCtrl.dispose();
+    super.dispose();
+  }
+
+  // ---------------- UI ----------------
+
+  @override
+  Widget build(BuildContext context) {
+    final isKm = _useMetric;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Quick Load')),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              _linePicker(
+                label: 'Client',
+                controller: _clientCtrl,
+                onPick: () => _pickFromCollection('clients', (d) {
+                  _clientCtrl.text = (d.data()['name'] ?? '').toString();
+                }),
+              ),
+              const SizedBox(height: 8),
+              // Shipper + Address
+              _linePicker(
+                label: 'Shipper (Company)',
+                controller: _shipperCtrl,
+                onPick: () => _pickFromCollection('shippers', (d) async {
+                  _shipperCtrl.text = (d.data()['name'] ?? '').toString();
+                  if (_pickupSameAsShipper) {
+                    final addr = await _resolveDefaultAddress(
+                        'shippers', _shipperCtrl.text);
+                    if (addr != null) _shipperAddrCtrl.text = addr;
+                    setState(() {});
+                  }
+                }),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Pickup address same as shipper'),
+                value: _pickupSameAsShipper,
+                onChanged: (v) async {
+                  setState(() => _pickupSameAsShipper = v);
+                  if (v) {
+                    final addr = await _resolveDefaultAddress(
+                        'shippers', _shipperCtrl.text);
+                    if (addr != null) _shipperAddrCtrl.text = addr;
+                    setState(() {});
+                  }
+                },
+              ),
+              if (!_pickupSameAsShipper)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _linePicker(
+                    label: 'Pickup Address',
+                    controller: _shipperAddrCtrl,
+                    onPick: () => _pickAddressFromSaved(
+                        'shippers', _shipperCtrl.text, (a) {
+                      _shipperAddrCtrl.text = a;
+                    }),
+                    keyboardType: TextInputType.streetAddress,
+                  ),
+                )
+              else
+                _readonlyAddressChip(_shipperAddrCtrl.text,
+                    onPick: () => _pickAddressFromSaved(
+                            'shippers', _shipperCtrl.text, (a) {
+                          _shipperAddrCtrl.text = a;
+                          setState(() {});
+                        })),
+              const SizedBox(height: 8),
+              // Receiver + Address
+              _linePicker(
+                label: 'Receiver (Company)',
+                controller: _receiverCtrl,
+                onPick: () => _pickFromCollection('receivers', (d) async {
+                  _receiverCtrl.text = (d.data()['name'] ?? '').toString();
+                  if (_deliverySameAsReceiver) {
+                    final addr = await _resolveDefaultAddress(
+                        'receivers', _receiverCtrl.text);
+                    if (addr != null) _receiverAddrCtrl.text = addr;
+                    setState(() {});
+                  }
+                }),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Delivery address same as receiver'),
+                value: _deliverySameAsReceiver,
+                onChanged: (v) async {
+                  setState(() => _deliverySameAsReceiver = v);
+                  if (v) {
+                    final addr = await _resolveDefaultAddress(
+                        'receivers', _receiverCtrl.text);
+                    if (addr != null) _receiverAddrCtrl.text = addr;
+                    setState(() {});
+                  }
+                },
+              ),
+              if (!_deliverySameAsReceiver)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _linePicker(
+                    label: 'Delivery Address',
+                    controller: _receiverAddrCtrl,
+                    onPick: () => _pickAddressFromSaved(
+                        'receivers', _receiverCtrl.text, (a) {
+                      _receiverAddrCtrl.text = a;
+                    }),
+                    keyboardType: TextInputType.streetAddress,
+                  ),
+                )
+              else
+                _readonlyAddressChip(_receiverAddrCtrl.text,
+                    onPick: () => _pickAddressFromSaved(
+                            'receivers', _receiverCtrl.text, (a) {
+                          _receiverAddrCtrl.text = a;
+                          setState(() {});
+                        })),
+
+              const SizedBox(height: 12),
+
+              // Driver & Truck
+              _driverPicker(),
+              const SizedBox(height: 8),
+              _truckPicker(),
+
+              const SizedBox(height: 12),
+              _startOriginPicker(),
+              if (_startOrigin == StartOrigin.custom) ...[
+                const SizedBox(height: 8),
+                _linePicker(
+                  label: 'Custom Start Address',
+                  controller: _customStartCtrl,
+                  keyboardType: TextInputType.streetAddress,
+                ),
+              ],
+
+              const SizedBox(height: 12),
+              _unitToggle(),
+
+              const SizedBox(height: 12),
+              _numbersRow(),
+
+              const SizedBox(height: 12),
+              _pricingCard(isKm),
+
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: _calculating ? null : _calculateAll,
+                      icon: const Icon(Icons.route),
+                      label: Text(_calculating
+                          ? 'Calculating…'
+                          : 'Calculate Distances'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _distancesView(),
+
+              const SizedBox(height: 12),
+              TextField(
+                controller: _notesCtrl,
+                minLines: 1,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: 'Notes (optional)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: _saving ? null : _saveLoad,
+                      icon: const Icon(Icons.save),
+                      label: Text(_saving ? 'Saving…' : 'Save Load'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ---------- Small UI helpers ----------
+
+  Widget _readonlyAddressChip(String text, {VoidCallback? onPick}) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Wrap(
+        spacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Chip(
+            label: Text(text.isEmpty ? '(no saved address yet)' : text),
+          ),
+          TextButton.icon(
+            onPressed: onPick,
+            icon: const Icon(Icons.list_alt),
+            label: const Text('Pick saved address'),
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _numbersRow() {
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(child: _numField('Shipping #', _shippingNumCtrl)),
+            const SizedBox(width: 8),
+            Expanded(child: _numField('PO #', _poNumCtrl)),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(child: _numField('Load #', _loadNumCtrl)),
+            const SizedBox(width: 8),
+            Expanded(child: _numField('Project #', _projectNumCtrl)),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _numField(String label, TextEditingController c) {
+    return TextField(
+      controller: c,
+      decoration: InputDecoration(
+        labelText: label,
+        border: const OutlineInputBorder(),
+        isDense: true,
+      ),
+    );
+  }
+
+  Widget _pricingCard(bool isKm) {
+    final isPerDist = _rateMode == RateMode.perDistance;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                const Text('Pricing',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+                const Spacer(),
+                ChoiceChip(
+                  label: const Text('Per distance'),
+                  selected: _rateMode == RateMode.perDistance,
+                  onSelected: (_) =>
+                      setState(() => _rateMode = RateMode.perDistance),
+                ),
+                const SizedBox(width: 8),
+                ChoiceChip(
+                  label: const Text('Flat per load'),
+                  selected: _rateMode == RateMode.flat,
+                  onSelected: (_) => setState(() => _rateMode = RateMode.flat),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (isPerDist)
+              TextField(
+                controller: _ratePerUnitCtrl,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(
+                  labelText: 'Rate per ${isKm ? "km" : "mile"}',
+                  prefixText: '\$ ',
+                  border: const OutlineInputBorder(),
+                  isDense: true,
+                ),
+                onChanged: (_) => _recomputePrice(),
+              )
+            else
+              TextField(
+                controller: _flatRateCtrl,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: 'Flat rate (per load)',
+                  prefixText: '\$ ',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                onChanged: (_) => _recomputePrice(),
+              ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Estimated total: ${_estimatedTotal == null ? "--" : "\$${_estimatedTotal!.toStringAsFixed(2)}"}',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _linePicker({
+    required String label,
+    required TextEditingController controller,
+    TextInputType? keyboardType,
+    VoidCallback? onPick,
+  }) {
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: controller,
+            keyboardType: keyboardType,
+            decoration: InputDecoration(
+              labelText: label,
+              border: const OutlineInputBorder(),
+              isDense: true,
+            ),
+            onChanged: (_) async {
+              // If name changed and toggle is ON, refresh the default address chip
+              if (label.startsWith('Shipper') && _pickupSameAsShipper) {
+                final addr =
+                    await _resolveDefaultAddress('shippers', _shipperCtrl.text);
+                if (addr != null) setState(() => _shipperAddrCtrl.text = addr);
+              }
+              if (label.startsWith('Receiver') && _deliverySameAsReceiver) {
+                final addr = await _resolveDefaultAddress(
+                    'receivers', _receiverCtrl.text);
+                if (addr != null) setState(() => _receiverAddrCtrl.text = addr);
+              }
+            },
+          ),
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          tooltip: 'Select from saved',
+          onPressed: onPick,
+          icon: const Icon(Icons.list_alt),
+        ),
+      ],
+    );
+  }
+
+  Widget _driverPicker() {
+    // We assume drivers live in 'employees' with role == 'driver'
+    final q = FirebaseFirestore.instance
+        .collection('employees')
+        .where('role', isEqualTo: 'driver')
+        .orderBy('name');
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: q.snapshots(),
+      builder: (context, snap) {
+        final items = <DropdownMenuItem<String>>[];
+        if (snap.hasData) {
+          for (final d in snap.data!.docs) {
+            final id = d.id;
+            final name = d.data()['name']?.toString() ?? 'Driver $id';
+            items.add(DropdownMenuItem(value: id, child: Text(name)));
+          }
+        }
+        return InputDecorator(
+          decoration: const InputDecoration(
+            labelText: 'Driver',
+            border: OutlineInputBorder(),
+            isDense: true,
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              isExpanded: true,
+              value: _selectedDriverId,
+              hint: const Text('Select driver (optional)'),
+              items: items,
+              onChanged: (v) async {
+                setState(() {
+                  _selectedDriverId = v;
+                });
+                // Auto-apply driver's default truck if present
+                if (v != null) {
+                  final d = await FirebaseFirestore.instance
+                      .collection('employees')
+                      .doc(v)
+                      .get();
+                  final data = d.data();
+                  final driverTruckId =
+                      data?['truckId'] ?? data?['defaultTruckId'];
+                  if (driverTruckId is String && driverTruckId.isNotEmpty) {
+                    setState(() => _selectedTruckId = driverTruckId);
+                  }
+                }
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _truckPicker() {
+    return FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      future:
+          FirebaseFirestore.instance.collection('trucks').orderBy('name').get(),
+      builder: (context, snap) {
+        final items = <DropdownMenuItem<String>>[];
+        if (snap.hasData) {
+          for (final d in snap.data!.docs) {
+            final id = d.id;
+            final name = d.data()['name']?.toString() ?? 'Truck $id';
+            items.add(DropdownMenuItem(value: id, child: Text(name)));
+          }
+        }
+        return InputDecorator(
+          decoration: const InputDecoration(
+            labelText: 'Truck',
+            border: OutlineInputBorder(),
+            isDense: true,
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              isExpanded: true,
+              value: _selectedTruckId,
+              hint: const Text('Select truck (optional)'),
+              items: items,
+              onChanged: (v) => setState(() => _selectedTruckId = v),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _startOriginPicker() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Start Location',
+            style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 4),
+        Wrap(
+          spacing: 12,
+          children: [
+            _originRadio(StartOrigin.liveTruck, 'Live Truck GPS'),
+            _originRadio(StartOrigin.lastDelivery, 'Truck’s Last Delivery'),
+            _originRadio(StartOrigin.yard, 'Yard'),
+            _originRadio(StartOrigin.custom, 'Custom'),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _originRadio(StartOrigin v, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Radio<StartOrigin>(
+          value: v,
+          groupValue: _startOrigin,
+          onChanged: (nv) => setState(() => _startOrigin = nv ?? _startOrigin),
+        ),
+        Text(label),
+      ],
+    );
+  }
+
+  Widget _unitToggle() {
+    return Row(
+      children: [
+        const Text('Units:', style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(width: 12),
+        ChoiceChip(
+          label: const Text('km'),
+          selected: _useMetric,
+          onSelected: (_) {
+            setState(() => _useMetric = true);
+            _recomputePrice();
+          },
+        ),
+        const SizedBox(width: 8),
+        ChoiceChip(
+          label: const Text('mi'),
+          selected: !_useMetric,
+          onSelected: (_) {
+            setState(() => _useMetric = false);
+            _recomputePrice();
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _distancesView() {
+    if (_truckToPickup == null && _pickupToDelivery == null) {
+      return const SizedBox.shrink();
+    }
+    return Column(
+      children: [
+        if (_truckToPickup != null)
+          _distCard('Truck ➜ Pickup', _truckToPickup!),
+        if (_pickupToDelivery != null)
+          _distCard('Pickup ➜ Delivery', _pickupToDelivery!),
+      ],
+    );
+  }
+
+  Widget _distCard(String title, DistanceResult r) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        leading: const Icon(Icons.straighten),
+        title: Text(title),
+        subtitle: Text('${r.distanceText} • ${r.durationText}'),
+      ),
+    );
+  }
+
+  // ----------- Selection helpers -----------
+
+  Future<void> _pickFromCollection(
+    String collection,
+    void Function(QueryDocumentSnapshot<Map<String, dynamic>>) onSelect,
+  ) async {
+    await showDialog(
+      context: context,
+      builder: (_) =>
+          _SelectDocDialog(collection: collection, onSelect: onSelect),
+    );
+    setState(() {});
+  }
+
+  Future<void> _pickAddressFromSaved(
+    String collection,
+    String parentName,
+    void Function(String address) onSelect,
+  ) async {
+    await showDialog(
+      context: context,
+      builder: (_) => _SelectAddressDialog(
+        collection: collection,
+        parentName: parentName,
+        onSelect: onSelect,
+      ),
+    );
+    setState(() {});
+  }
+
+  Future<String?> _resolveDefaultAddress(String collection, String name) async {
+    if (name.trim().isEmpty) return null;
+    final col = FirebaseFirestore.instance.collection(collection);
+    final q = await col.where('name', isEqualTo: name).limit(1).get();
+    if (q.docs.isEmpty) return null;
+    final data = q.docs.first.data();
+    final addr = (data['address'] ?? '').toString();
+    if (addr.isNotEmpty) return addr;
+    final list = (data['addresses'] ?? []) as List<dynamic>;
+    if (list.isNotEmpty) return list.first.toString();
+    return null;
+    // If you keep addresses elsewhere (subcollection), adapt this.
+  }
+
+  // -------------- Calculate --------------
+
+  Future<void> _calculateAll() async {
+    final pickup = _shipperAddrCtrl.text.trim();
+    final delivery = _receiverAddrCtrl.text.trim();
+    if (pickup.isEmpty || delivery.isEmpty) {
+      _snack('Enter pickup and delivery addresses first.');
+      return;
+    }
+
+    setState(() => _calculating = true);
+    try {
+      _pickupToDelivery = await _distanceMatrix(
+        origin: pickup,
+        destination: delivery,
+        unitsMetric: _useMetric,
+      );
+
+      final origin = await _resolveStartOriginAddress();
+      if (origin != null && origin.isNotEmpty) {
+        _truckToPickup = await _distanceMatrix(
+          origin: origin,
+          destination: pickup,
+          unitsMetric: _useMetric,
+        );
+      } else {
+        _truckToPickup = null;
+      }
+
+      _recomputePrice();
+      setState(() {});
+    } catch (e) {
+      _snack('Failed to calculate distances: $e');
+    } finally {
+      setState(() => _calculating = false);
+    }
+  }
+
+  Future<String?> _resolveStartOriginAddress() async {
+    switch (_startOrigin) {
+      case StartOrigin.custom:
+        return _customStartCtrl.text.trim();
+      case StartOrigin.yard:
+        final doc = await FirebaseFirestore.instance
+            .collection('settings')
+            .doc('app')
+            .get();
+        if (doc.exists) {
+          final data = doc.data()!;
+          final yardAddr = (data['yardAddress'] ?? '').toString();
+          final yardLat = data['yardLat'];
+          final yardLng = data['yardLng'];
+          if (yardAddr.isNotEmpty) return yardAddr;
+          if (yardLat != null && yardLng != null) return '$yardLat,$yardLng';
+        }
+        return null;
+      case StartOrigin.lastDelivery:
+        if (_selectedTruckId == null) return null;
+        final q = await FirebaseFirestore.instance
+            .collection('loads')
+            .where('truckId', isEqualTo: _selectedTruckId)
+            .where('status', isEqualTo: 'Delivered')
+            .orderBy('deliveredAt', descending: true)
+            .limit(1)
+            .get();
+        if (q.docs.isNotEmpty) {
+          final d = q.docs.first.data();
+          final addr = (d['deliveryAddress'] ?? '').toString();
+          final lat = d['deliveryLat'];
+          final lng = d['deliveryLng'];
+          if (addr.isNotEmpty) return addr;
+          if (lat != null && lng != null) return '$lat,$lng';
+        }
+        return null;
+      case StartOrigin.liveTruck:
+        if (_selectedTruckId == null) return null;
+        final v = await FirebaseFirestore.instance
+            .collection('vehicles')
+            .doc(_selectedTruckId)
+            .get();
+        if (v.exists) {
+          final live = v.data()?['live'] as Map<String, dynamic>?;
+          final lat = live?['lat'];
+          final lng = live?['lng'];
+          if (lat != null && lng != null) return '$lat,$lng';
+        }
+        return null;
+    }
+  }
+
+  Future<DistanceResult> _distanceMatrix({
+    required String origin,
+    required String destination,
+    required bool unitsMetric,
+  }) async {
+    if (kGoogleMapsApiKey == 'YOUR_GOOGLE_MAPS_API_KEY' ||
+        kGoogleMapsApiKey.isEmpty) {
+      throw 'Add your Google Maps API key in kGoogleMapsApiKey.';
+    }
+    final units = unitsMetric ? 'metric' : 'imperial';
+    final url =
+        'https://maps.googleapis.com/maps/api/distancematrix/json?origins=${Uri.encodeComponent(origin)}&destinations=${Uri.encodeComponent(destination)}&units=$units&key=$kGoogleMapsApiKey';
+
+    final res = await http.get(Uri.parse(url));
+    if (res.statusCode != 200) {
+      throw 'Distance Matrix error HTTP ${res.statusCode}';
+    }
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    if (data['status'] != 'OK') {
+      throw 'Distance Matrix status ${data['status']}';
+    }
+    final rows = data['rows'] as List<dynamic>;
+    if (rows.isEmpty) throw 'No rows in Distance Matrix response';
+    final elements =
+        (rows.first as Map<String, dynamic>)['elements'] as List<dynamic>;
+    if (elements.isEmpty) throw 'No elements in Distance Matrix response';
+    final el = elements.first as Map<String, dynamic>;
+    if (el['status'] != 'OK') throw 'Element status ${el['status']}';
+
+    final dist = el['distance'] as Map<String, dynamic>;
+    final dur = el['duration'] as Map<String, dynamic>;
+    return DistanceResult(
+      distanceMeters: (dist['value'] as num).toInt(),
+      distanceText: dist['text'] as String,
+      durationSeconds: (dur['value'] as num).toInt(),
+      durationText: dur['text'] as String,
+    );
+  }
+
+  // -------------- Pricing --------------
+
+  void _recomputePrice() {
+    double? total;
+    if (_rateMode == RateMode.perDistance && _pickupToDelivery != null) {
+      final meters = _pickupToDelivery!.distanceMeters.toDouble();
+      final distanceUnits =
+          _useMetric ? (meters / 1000.0) : (meters / 1609.344); // km or miles
+      final rate = _parseDouble(_ratePerUnitCtrl.text);
+      if (rate != null) total = rate * distanceUnits;
+    } else if (_rateMode == RateMode.flat) {
+      total = _parseDouble(_flatRateCtrl.text);
+    }
+    setState(() => _estimatedTotal = total);
+  }
+
+  double? _parseDouble(String s) {
+    final t = s.replaceAll(',', '').trim();
+    if (t.isEmpty) return null;
+    return double.tryParse(t);
+  }
+
+  // -------------- Save --------------
+
+  Future<void> _saveLoad() async {
+    final client = _clientCtrl.text.trim();
+    final shipper = _shipperCtrl.text.trim();
+    final pickupAddr = _shipperAddrCtrl.text.trim();
+    final receiver = _receiverCtrl.text.trim();
+    final deliveryAddr = _receiverAddrCtrl.text.trim();
+
+    if (client.isEmpty ||
+        shipper.isEmpty ||
+        pickupAddr.isEmpty ||
+        receiver.isEmpty ||
+        deliveryAddr.isEmpty) {
+      _snack('Please fill Client, Shipper, Pickup, Receiver, Delivery.');
+      return;
+    }
+
+    // Ensure we have distances for ETA/price display
+    if (_pickupToDelivery == null ||
+        (_selectedTruckId != null && _truckToPickup == null)) {
+      await _calculateAll();
+    }
+
+    setState(() => _saving = true);
+    try {
+      final now = DateTime.now();
+      final loads = FirebaseFirestore.instance.collection('loads');
+
+      final pricing = <String, dynamic>{
+        'mode': _rateMode == RateMode.perDistance ? 'per_distance' : 'flat',
+        'currency': 'CAD', // change if you want multi-currency later
+        if (_rateMode == RateMode.perDistance) ...{
+          'unit': _useMetric ? 'km' : 'mi',
+          'ratePerUnit': _parseDouble(_ratePerUnitCtrl.text),
+          'estimatedTotal': _estimatedTotal,
+          'distanceMetersSnapshot': _pickupToDelivery?.distanceMeters,
+        } else ...{
+          'flatRate': _parseDouble(_flatRateCtrl.text),
+          'estimatedTotal': _estimatedTotal,
+        },
+      };
+
+      final docData = {
+        'createdAt': now,
+        'status': 'Planned',
+        'clientName': client,
+        'shipperName': shipper,
+        'pickupAddress': pickupAddr,
+        'receiverName': receiver,
+        'deliveryAddress': deliveryAddr,
+        'units': _useMetric ? 'metric' : 'imperial',
+        'notes': _notesCtrl.text.trim(),
+
+        // Links
+        'driverId': _selectedDriverId,
+        'truckId': _selectedTruckId,
+
+        // Numbers
+        'shippingNumber': _shippingNumCtrl.text.trim(),
+        'poNumber': _poNumCtrl.text.trim(),
+        'loadNumber': _loadNumCtrl.text.trim(),
+        'projectNumber': _projectNumCtrl.text.trim(),
+
+        // Distance snapshots
+        if (_truckToPickup != null) 'truckToPickup': _truckToPickup!.toMap(),
+        if (_pickupToDelivery != null)
+          'pickupToDelivery': _pickupToDelivery!.toMap(),
+
+        // Pricing
+        'pricing': pricing,
+      };
+
+      await loads.add(docData);
+
+      if (!mounted) return;
+      _snack('Load saved.');
+      Navigator.pop(context, true);
+    } catch (e) {
+      _snack('Failed to save: $e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  void _snack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+}
+
+// ---------- Dialogs ----------
+
+class _SelectDocDialog extends StatefulWidget {
+  final String collection;
+  final void Function(QueryDocumentSnapshot<Map<String, dynamic>>) onSelect;
+  const _SelectDocDialog({required this.collection, required this.onSelect});
+
+  @override
+  State<_SelectDocDialog> createState() => _SelectDocDialogState();
+}
+
+class _SelectDocDialogState extends State<_SelectDocDialog> {
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final col = FirebaseFirestore.instance.collection(widget.collection);
+    final stream = col.limit(100).snapshots();
+
+    return AlertDialog(
+      title: Text('Select ${widget.collection}'),
+      content: SizedBox(
+        width: 480,
+        height: 420,
+        child: Column(
+          children: [
+            TextField(
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search),
+                hintText: 'Search name…',
+              ),
+              onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: stream,
+                builder: (context, snap) {
+                  if (!snap.hasData)
+                    return const Center(child: CircularProgressIndicator());
+                  final docs = snap.data!.docs.where((d) {
+                    final name =
+                        (d.data()['name'] ?? '').toString().toLowerCase();
+                    return _query.isEmpty || name.contains(_query);
+                  }).toList();
+                  if (docs.isEmpty)
+                    return const Center(child: Text('No matches.'));
+                  return ListView.separated(
+                    itemCount: docs.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (_, i) {
+                      final d = docs[i];
+                      final name = (d.data()['name'] ?? '').toString();
+                      return ListTile(
+                        title: Text(name),
+                        onTap: () {
+                          widget.onSelect(d);
+                          Navigator.pop(context);
+                        },
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context), child: const Text('Close'))
+      ],
+    );
+  }
+}
+
+class _SelectAddressDialog extends StatefulWidget {
+  final String collection;
+  final String parentName;
+  final void Function(String address) onSelect;
+  const _SelectAddressDialog({
+    required this.collection,
+    required this.parentName,
+    required this.onSelect,
+  });
+
+  @override
+  State<_SelectAddressDialog> createState() => _SelectAddressDialogState();
+}
+
+class _SelectAddressDialogState extends State<_SelectAddressDialog> {
+  final _manualAddrCtrl = TextEditingController();
+  @override
+  void dispose() {
+    _manualAddrCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final col = FirebaseFirestore.instance.collection(widget.collection);
+    final stream =
+        col.where('name', isEqualTo: widget.parentName).limit(1).snapshots();
+
+    return AlertDialog(
+      title: Text('Pick ${widget.collection} address'),
+      content: SizedBox(
+        width: 520,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: stream,
+              builder: (context, snap) {
+                final addresses = <String>[];
+                if (snap.hasData && snap.data!.docs.isNotEmpty) {
+                  final data = snap.data!.docs.first.data();
+                  final list = (data['addresses'] ?? []) as List<dynamic>;
+                  if (data['address'] != null &&
+                      (data['address'] as String).isNotEmpty) {
+                    addresses.add(data['address'] as String);
+                  }
+                  addresses.addAll(list.map((e) => e.toString()));
+                }
+                if (addresses.isEmpty) {
+                  return const Text(
+                      'No saved addresses found. Enter manually below.');
+                }
+                return SizedBox(
+                  height: 180,
+                  child: ListView.separated(
+                    itemBuilder: (_, i) => ListTile(
+                      leading: const Icon(Icons.place),
+                      title: Text(addresses[i]),
+                      onTap: () {
+                        widget.onSelect(addresses[i]);
+                        Navigator.pop(context);
+                      },
+                    ),
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemCount: addresses.length,
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _manualAddrCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Or enter address',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel')),
+        FilledButton(
+          onPressed: () {
+            final a = _manualAddrCtrl.text.trim();
+            if (a.isNotEmpty) {
+              widget.onSelect(a);
+              Navigator.pop(context);
+            }
+          },
+          child: const Text('Use this address'),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------- Models ----------
+
+class DistanceResult {
+  final int distanceMeters;
+  final String distanceText;
+  final int durationSeconds;
+  final String durationText;
+  DistanceResult({
+    required this.distanceMeters,
+    required this.distanceText,
+    required this.durationSeconds,
+    required this.durationText,
+  });
+  Map<String, dynamic> toMap() => {
+        'distanceMeters': distanceMeters,
+        'distanceText': distanceText,
+        'durationSeconds': durationSeconds,
+        'durationText': durationText,
+      };
+}
+
+enum StartOrigin { liveTruck, lastDelivery, yard, custom }
+
+enum RateMode { perDistance, flat }
