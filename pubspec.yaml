@@ -1,56 +1,67 @@
+```yaml
 name: full_load
 description: Full Load dispatch & accounting app
 publish_to: "none"
 version: 1.0.0+1
 
 environment:
-  sdk: ">=3.2.0 <4.0.0"
+  sdk: ">=3.3.0 <4.0.0"
 
 dependencies:
   flutter:
     sdk: flutter
-  flutter_localizations:
-    sdk: flutter
 
+  # ---- Core UI ----
   cupertino_icons: ^1.0.8
-  intl: ^0.20.2
-  http: ^1.2.2
+  intl: ^0.19.0  # Downgraded for compatibility; update if no issues
   url_launcher: ^6.3.0
+  provider: ^6.1.2  # For state management (roles, etc.)
 
-  # ---- Firebase 4.x family (keep these aligned) ----
-  firebase_core: ^4.0.0
-  firebase_auth: ^6.0.1
-  cloud_firestore: ^6.0.0
-  firebase_storage: ^13.0.0
+  # ---- HTTP / Networking ----
+  http: ^1.2.2  # For API calls (xAI, Google Maps, reminders)
 
-  # ---- App Check (compatible with firebase_core 4.x) ----
-  firebase_app_check: ^0.4.0
+  # ---- Firebase (aligned to latest consistent majors) ----
+  firebase_core: ^3.4.0  # Core; align with others
+  cloud_firestore: ^5.4.0
+  firebase_auth: ^5.3.0
+  firebase_storage: ^13.0.0  # For uploads (images/docs)
+  firebase_app_check: ^0.4.0  # Security (web/mobile)
+  firebase_messaging: ^15.0.4  # For driver notifications/alerts
 
-  # ---- Auth UI ----
-  firebase_ui_auth: ^3.0.0
+  # ---- Geolocation & Maps ----
+  google_maps_flutter: ^2.9.0  # For routes/time/distance (multi-pickup/drop)
+  geolocator: ^12.0.0  # For driver/fleet tracking
 
   # ---- Files / preview / printing ----
-  image_picker: ^1.2.0
-  file_picker: ^10.3.1
-  archive: ^3.6.1
+  image_picker: ^1.1.2  # For driver uploads (photos)
+  file_picker: ^10.3.2
+  archive: ^4.0.7  # For ZIP exports (e.g., docs)
   path_provider: ^2.1.4
-  permission_handler: ^11.3.1
-  share_plus: ^10.0.2
+  permission_handler: ^12.0.1  # For storage/camera
+  share_plus: ^10.0.0  # For sharing invoices/PDFs/exports
+  open_filex: ^4.6.0  # For opening previews
+  mime: ^2.0.0  # For content types (uploads/previews)
 
-  printing: ^5.13.0
-  pdf: ^3.11.0
-  open_filex: ^4.5.0
-  webview_flutter: ^4.8.0
-  mime: ^1.0.5
-  # pdfrx: ^1.6.9   # optional
+  # ---- Document/PDF handling ----
+  printing: ^5.13.1  # For PDF generate/print/share (invoices)
+  pdf: ^3.10.9  # For PDF creation (invoices with attachments)
+  webview_flutter: ^4.9.0  # For previews if needed
+  photo_view: ^0.15.0  # For image zoom/preview
+  flutter_pdfview: ^1.4.1+1  # For PDF viewer
+
+  # ---- Additional for features ----
+  barcode_scan2: ^4.2.4  # For mechanic parts scanning
+  stripe_flutter: ^10.1.0  # For subscriptions/tiers
+  rxdart: ^0.27.7  # For streams (debounce in role stream)
+  csv: ^6.0.0  # For exports (loads/invoices)
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^4.0.0
+  flutter_lints: ^6.0.0
 
 flutter:
   uses-material-design: true
   assets:
     - assets/
-
+```

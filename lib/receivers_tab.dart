@@ -1,6 +1,9 @@
 // lib/receivers_tab.dart
 // Receivers: list + full-screen editor (clean like Client).
 // Save closes immediately; Firestore writes finish in background.
+// NOTE: No Address Line 2 anywhere in the UI or payload.
+// Updated to handle authentication: sign in anonymously if not authenticated.
+// Ensure Firebase Anonymous Auth is enabled in console, and Firestore rules allow reads/writes if request.auth != null.
 
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -31,15 +34,21 @@ Future<void> _callNumber(BuildContext context, String? raw) async {
   }
 }
 
+Future<void> _openMaps(String address) async {
+  if (address.trim().isEmpty) return;
+  final uri = Uri.parse(
+      'https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(address)}');
+  await launchUrl(uri, mode: LaunchMode.externalApplication);
+}
+
 /// =======================
 /// Models
 /// =======================
 
 class Address {
-  String line1, line2, city, region, postalCode, country;
+  String line1, city, region, postalCode, country;
   Address({
     this.line1 = '',
-    this.line2 = '',
     this.city = '',
     this.region = '',
     this.postalCode = '',
@@ -48,7 +57,6 @@ class Address {
 
   Map<String, dynamic> toMap() => {
         'line1': line1,
-        'line2': line2, // kept for backward compatibility (not in UI)
         'city': city,
         'region': region,
         'postalCode': postalCode,
@@ -57,7 +65,6 @@ class Address {
 
   factory Address.fromMap(Map<String, dynamic>? m) => Address(
         line1: (m?['line1'] ?? '').toString(),
-        line2: (m?['line2'] ?? '').toString(), // ignored in UI
         city: (m?['city'] ?? '').toString(),
         region: (m?['region'] ?? '').toString(),
         postalCode: (m?['postalCode'] ?? '').toString(),
@@ -93,279 +100,227 @@ class PersonContact {
 }
 
 class Receiver {
-  String id;
-  String name;
+  String id, name, legacyId, legacyName;
   Address address;
-  String email; // main/site email
-  String mobilePhone; // site mobile
-  String workPhone; // site phone
-  String workExt; // site ext
-  String hours; // hours of operation (free text)
-  String notes;
-
-  // Optional higher-up / head office contact
-  PersonContact headOffice;
-
-  // Multiple on-site receiver contacts
+  String email, mobilePhone, phone, ext, fax, website;
+  String hours, notes;
   List<PersonContact> contacts;
+  bool isActive;
 
   Receiver({
-    this.id = '',
+    required this.id,
     this.name = '',
-    Address? address,
+    this.legacyId = '',
+    this.legacyName = '',
+    required this.address,
     this.email = '',
     this.mobilePhone = '',
-    this.workPhone = '',
-    this.workExt = '',
+    this.phone = '',
+    this.ext = '',
+    this.fax = '',
+    this.website = '',
     this.hours = '',
     this.notes = '',
-    PersonContact? headOffice,
-    List<PersonContact>? contacts,
-  })  : address = address ?? Address(),
-        headOffice = headOffice ?? PersonContact(),
-        contacts = contacts ?? <PersonContact>[];
+    required this.contacts,
+    this.isActive = true,
+  });
 
   Map<String, dynamic> toMap() => {
+        'id': id,
         'name': name,
         'nameLower': name.toLowerCase(),
+        'legacyId': legacyId,
+        'legacyName': legacyName,
         'address': address.toMap(),
         'email': email,
         'mobilePhone': mobilePhone,
-        'workPhone': workPhone,
-        'workExt': workExt,
+        'phone': phone,
+        'ext': ext,
+        'fax': fax,
+        'website': website,
         'hours': hours,
         'notes': notes,
-        'headOffice': headOffice.toMap(),
         'contacts': contacts.map((c) => c.toMap()).toList(),
+        'isActive': isActive,
         'updatedAt': FieldValue.serverTimestamp(),
-        if (id.isEmpty) 'createdAt': FieldValue.serverTimestamp(),
       };
 
-  factory Receiver.fromDoc(DocumentSnapshot<Map<String, dynamic>> d) {
-    final m = d.data() ?? {};
-    Address addr;
-    if (m['address'] is Map) {
-      addr = Address.fromMap(m['address'] as Map<String, dynamic>);
-    } else {
-      addr = Address(line1: (m['mainAddress'] ?? '').toString());
-    }
-    final contacts = (m['contacts'] is List)
-        ? (m['contacts'] as List)
-            .map((x) => PersonContact.fromMap(x as Map<String, dynamic>?))
-            .toList()
-        : <PersonContact>[];
-    final ho = (m['headOffice'] is Map)
-        ? PersonContact.fromMap(m['headOffice'] as Map<String, dynamic>)
-        : PersonContact(
-            name: (m['headOfficeName'] ?? '').toString(),
-            email: (m['headOfficeEmail'] ?? '').toString(),
-            phone: (m['headOfficePhone'] ?? '').toString(),
-            ext: (m['headOfficeExt'] ?? '').toString(),
-          );
+  factory Receiver.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
+    final m = doc.data()!;
     return Receiver(
-      id: d.id,
+      id: doc.id,
       name: (m['name'] ?? '').toString(),
-      address: addr,
-      email: (m['email'] ?? m['mainEmail'] ?? '').toString(),
-      mobilePhone: (m['mobilePhone'] ?? m['mainMobile'] ?? '').toString(),
-      workPhone: (m['workPhone'] ?? m['mainPhone'] ?? '').toString(),
-      workExt: (m['workExt'] ?? '').toString(),
-      hours: (m['hours'] ?? '').toString(),
-      notes: (m['notes'] ?? '').toString(),
-      headOffice: ho,
-      contacts: contacts,
+      legacyId: (m['legacyId'] ?? m['LegacyID'] ?? '').toString(), // compat
+      legacyName:
+          (m['legacyName'] ?? m['LegacyName'] ?? '').toString(), // compat
+      address: Address.fromMap(m['address']),
+      email: (m['email'] ?? m['Email'] ?? '').toString(), // compat
+      mobilePhone: (m['mobilePhone'] ?? m['MobilePhone'] ?? '').toString(),
+      phone: (m['phone'] ?? m['Phone'] ?? '').toString(),
+      ext: (m['ext'] ?? m['Ext'] ?? '').toString(),
+      fax: (m['fax'] ?? m['Fax'] ?? '').toString(),
+      website: (m['website'] ?? m['Website'] ?? '').toString(),
+      hours: (m['hours'] ?? m['Hours'] ?? '').toString(),
+      notes: (m['notes'] ?? m['Notes'] ?? '').toString(),
+      contacts: (m['contacts'] as List<dynamic>? ?? [])
+          .map((c) => PersonContact.fromMap(c))
+          .toList(),
+      isActive: m['isActive'] as bool? ?? true,
     );
   }
 }
 
 /// =======================
-/// Receivers Tab (List)
+/// List Screen
 /// =======================
 
 class ReceiversTab extends StatefulWidget {
   const ReceiversTab({super.key});
+
   @override
   State<ReceiversTab> createState() => _ReceiversTabState();
 }
 
 class _ReceiversTabState extends State<ReceiversTab> {
-  static const bool kDevAllowAllWrites = true; // Set false for role-gated
-  final _searchCtrl = TextEditingController();
-  String _query = '';
-
-  String _role = 'viewer';
-  bool get _canEdit =>
-      kDevAllowAllWrites || _role == 'admin' || _role == 'dispatcher';
-  bool get _canDelete =>
-      kDevAllowAllWrites || _role == 'admin' || _role == 'dispatcher';
+  final _search = TextEditingController();
+  String _q = '';
 
   @override
   void initState() {
     super.initState();
-    _loadRole();
-    _searchCtrl.addListener(
-        () => setState(() => _query = _searchCtrl.text.trim().toLowerCase()));
+    _ensureAuthenticated();
+    _search.addListener(
+        () => setState(() => _q = _search.text.trim().toLowerCase()));
   }
 
-  Future<void> _loadRole() async {
-    try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return;
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get();
-      setState(() => _role = (doc.data() ?? const {})['role'] ?? 'viewer');
-    } catch (_) {
-      setState(() => _role = 'viewer');
+  Future<void> _ensureAuthenticated() async {
+    if (FirebaseAuth.instance.currentUser == null) {
+      try {
+        await FirebaseAuth.instance.signInAnonymously();
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('Auth failed: $e')));
+        }
+      }
     }
   }
 
   @override
   void dispose() {
-    _searchCtrl.dispose();
+    _search.dispose();
     super.dispose();
-  }
-
-  void _handleResult(dynamic result) {
-    if (result is! Map) return;
-    final action = result['action']?.toString();
-    final name = (result['name']?.toString().trim().isNotEmpty ?? false)
-        ? result['name'].toString()
-        : 'Receiver';
-
-    String? msg;
-    if (action == 'created') msg = 'Saved "$name".';
-    if (action == 'updated') msg = 'Updated "$name".';
-    if (action == 'deleted') msg = 'Deleted "$name".';
-    if (msg != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final q = FirebaseFirestore.instance
+    final stream = FirebaseFirestore.instance
         .collection('receivers')
         .orderBy('nameLower')
-        .limit(300);
+        .limit(500)
+        .snapshots();
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Receivers'),
-        actions: [
-          if (_canEdit)
-            IconButton(
-              tooltip: 'New receiver',
-              icon: const Icon(Icons.add),
-              onPressed: () async {
-                final result = await Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ReceiverEditScreen()),
-                );
-                _handleResult(result);
-              },
-            ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('Receivers')),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
             TextField(
-              controller: _searchCtrl,
+              controller: _search,
               decoration: const InputDecoration(
                 prefixIcon: Icon(Icons.search),
-                hintText: 'Search name, address, phone, or email',
+                hintText: 'Search name, address, email, phone',
                 border: OutlineInputBorder(),
               ),
             ),
             const SizedBox(height: 12),
             Expanded(
               child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: q.snapshots(),
+                stream: stream,
                 builder: (context, snap) {
                   if (snap.hasError) {
-                    return Center(child: Text('Error: ${snap.error}'));
+                    return Center(
+                        child: Text(
+                            'Error: ${snap.error}. Check permissions or sign in.'));
                   }
                   if (!snap.hasData) {
                     return const Center(child: CircularProgressIndicator());
                   }
-                  final docs =
-                      snap.data!.docs.map((d) => Receiver.fromDoc(d)).toList();
+                  var receivers =
+                      snap.data!.docs.map(Receiver.fromDoc).toList();
 
-                  final filtered = _query.isEmpty
-                      ? docs
-                      : docs.where((r) {
-                          final hay = [
-                            r.name,
-                            r.address.line1,
-                            r.address.city,
-                            r.address.region,
-                            r.email,
-                            r.mobilePhone,
-                            r.workPhone,
-                          ].join(' ').toLowerCase();
-                          return hay.contains(_query);
-                        }).toList();
+                  if (_q.isNotEmpty) {
+                    receivers = receivers.where((r) {
+                      final hay = [
+                        r.name,
+                        r.address.line1,
+                        r.address.city,
+                        r.email,
+                        r.mobilePhone,
+                        r.phone,
+                        ...r.contacts
+                            .map((c) => '${c.name} ${c.email} ${c.phone}'),
+                      ].join(' ').toLowerCase();
+                      return hay.contains(_q);
+                    }).toList();
+                  }
 
-                  if (filtered.isEmpty) {
-                    return const Center(child: Text('No receivers found.'));
+                  if (receivers.isEmpty) {
+                    return const Center(child: Text('No receivers'));
                   }
 
                   return ListView.separated(
-                    itemCount: filtered.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemCount: receivers.length,
+                    separatorBuilder: (_, __) => const Divider(),
                     itemBuilder: (_, i) {
-                      final r = filtered[i];
-                      final subtitle = _oneLine(
-                          '${r.address.line1} ${r.address.city} ${r.address.region} ${r.address.postalCode} • ${r.email}');
+                      final r = receivers[i];
+                      final addr =
+                          _oneLine('${r.address.line1} ${r.address.city}');
                       return ListTile(
-                        leading: const CircleAvatar(child: Icon(Icons.store)),
-                        title: Text(r.name.isEmpty ? 'Unnamed' : r.name),
-                        subtitle: Text(subtitle,
-                            maxLines: 1, overflow: TextOverflow.ellipsis),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
+                        leading: const Icon(Icons.inventory_2),
+                        title: Text(r.name.isEmpty ? '(unnamed)' : r.name),
+                        subtitle:
+                            Text(_oneLine('$addr • ${r.email} • ${r.phone}')),
+                        trailing: Wrap(
+                          spacing: 8,
                           children: [
                             IconButton(
-                              tooltip:
-                                  r.workPhone.isEmpty ? 'No phone' : 'Call',
-                              icon: const Icon(Icons.call),
-                              onPressed: r.workPhone.isEmpty
-                                  ? null
-                                  : () => _callNumber(context, r.workPhone),
-                            ),
-                            if (_canDelete)
-                              IconButton(
-                                tooltip: 'Delete',
-                                icon: const Icon(Icons.delete_outline),
-                                onPressed: () => _confirmDelete(r),
-                              ),
-                            IconButton(
-                              tooltip: _canEdit ? 'Edit' : 'View',
                               icon: const Icon(Icons.edit),
+                              tooltip: 'Edit',
                               onPressed: () async {
-                                final result = await Navigator.push(
+                                final res = await Navigator.push(
                                   context,
                                   MaterialPageRoute(
                                       builder: (_) =>
                                           ReceiverEditScreen(receiverId: r.id)),
                                 );
-                                _handleResult(result);
+                                if (res is Map && res['action'] != null) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                          content: Text(
+                                              '${res['action']} receiver: ${res['name']}')));
+                                }
                               },
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.call),
+                              tooltip: 'Call',
+                              onPressed: () => _callNumber(context, r.phone),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.map),
+                              tooltip: 'Open in Maps',
+                              onPressed: () => _openMaps(addr),
                             ),
                           ],
                         ),
-                        onTap: () async {
-                          final result = await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                                builder: (_) =>
-                                    ReceiverEditScreen(receiverId: r.id)),
-                          );
-                          _handleResult(result);
-                        },
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) =>
+                                  ReceiverEditScreen(receiverId: r.id)),
+                        ),
                       );
                     },
                   );
@@ -375,47 +330,25 @@ class _ReceiversTabState extends State<ReceiversTab> {
           ],
         ),
       ),
-    );
-  }
-
-  Future<void> _confirmDelete(Receiver r) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Delete Receiver?'),
-        content: Text('Delete "${r.name.isEmpty ? 'this receiver' : r.name}"? '
-            'This cannot be undone.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Delete')),
-        ],
+      floatingActionButton: FloatingActionButton(
+        onPressed: () async {
+          final res = await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const ReceiverEditScreen()),
+          );
+          if (res is Map && res['action'] != null) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text('${res['action']} receiver: ${res['name']}')));
+          }
+        },
+        child: const Icon(Icons.add),
       ),
     );
-    if (ok != true) return;
-    try {
-      await FirebaseFirestore.instance
-          .collection('receivers')
-          .doc(r.id)
-          .delete();
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Receiver deleted.')));
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
-      }
-    }
   }
 }
 
 /// =======================
-/// Editor
+/// Edit Screen
 /// =======================
 
 class ReceiverEditScreen extends StatefulWidget {
@@ -427,181 +360,294 @@ class ReceiverEditScreen extends StatefulWidget {
 }
 
 class _ReceiverEditScreenState extends State<ReceiverEditScreen> {
-  final _formKey = GlobalKey<FormState>();
-  final _scroll = ScrollController();
-  final _nameFocus = FocusNode();
-
-  bool _saving = false;
-  Receiver _receiver = Receiver();
-
-  // Controllers
-  final _name = TextEditingController();
-
-  final _addr1 = TextEditingController(),
-      _city = TextEditingController(),
-      _region = TextEditingController(),
-      _postal = TextEditingController(),
-      _country = TextEditingController(text: 'CA');
-
-  final _email = TextEditingController(),
-      _mobile = TextEditingController(),
-      _work = TextEditingController(),
-      _ext = TextEditingController();
-
-  final _hours = TextEditingController(), _notes = TextEditingController();
-
-  // Head Office
-  final _hoName = TextEditingController(),
-      _hoPhone = TextEditingController(),
-      _hoExt = TextEditingController(),
-      _hoEmail = TextEditingController();
-
-  List<PersonContact> _contacts = <PersonContact>[];
+  late final TextEditingController name,
+      legacyId,
+      legacyName,
+      line1,
+      city,
+      region,
+      postal,
+      country,
+      email,
+      mobile,
+      phone,
+      ext,
+      fax,
+      website,
+      hours,
+      notes;
+  late List<PersonContact> _contacts;
+  bool _isActive = true;
+  bool _loading = true;
+  Receiver? _original;
 
   @override
   void initState() {
     super.initState();
-    if (widget.receiverId != null) _load();
+    name = TextEditingController();
+    legacyId = TextEditingController();
+    legacyName = TextEditingController();
+    line1 = TextEditingController();
+    city = TextEditingController();
+    region = TextEditingController();
+    postal = TextEditingController();
+    country = TextEditingController(text: 'CA');
+    email = TextEditingController();
+    mobile = TextEditingController();
+    phone = TextEditingController();
+    ext = TextEditingController();
+    fax = TextEditingController();
+    website = TextEditingController();
+    hours = TextEditingController();
+    notes = TextEditingController();
+    _contacts = [];
+    if (widget.receiverId != null) {
+      _load();
+    } else {
+      _loading = false;
+    }
+  }
+
+  Future<void> _load() async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('receivers')
+          .doc(widget.receiverId)
+          .get();
+      if (!doc.exists) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Receiver not found')));
+          Navigator.pop(context);
+        }
+        return;
+      }
+      _original = Receiver.fromDoc(doc);
+      name.text = _original!.name;
+      legacyId.text = _original!.legacyId;
+      legacyName.text = _original!.legacyName;
+      line1.text = _original!.address.line1;
+      city.text = _original!.address.city;
+      region.text = _original!.address.region;
+      postal.text = _original!.address.postalCode;
+      country.text = _original!.address.country;
+      email.text = _original!.email;
+      mobile.text = _original!.mobilePhone;
+      phone.text = _original!.phone;
+      ext.text = _original!.ext;
+      fax.text = _original!.fax;
+      website.text = _original!.website;
+      hours.text = _original!.hours;
+      notes.text = _original!.notes;
+      _contacts = List.from(_original!.contacts);
+      _isActive = _original!.isActive;
+      setState(() => _loading = false);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Load failed: $e')));
+        Navigator.pop(context);
+      }
+    }
   }
 
   @override
   void dispose() {
-    _scroll.dispose();
-    _nameFocus.dispose();
-    for (final c in [
-      _name,
-      _addr1,
-      _city,
-      _region,
-      _postal,
-      _country,
-      _email,
-      _mobile,
-      _work,
-      _ext,
-      _hours,
-      _notes,
-      _hoName,
-      _hoPhone,
-      _hoExt,
-      _hoEmail,
-    ]) {
-      c.dispose();
-    }
+    name.dispose();
+    legacyId.dispose();
+    legacyName.dispose();
+    line1.dispose();
+    city.dispose();
+    region.dispose();
+    postal.dispose();
+    country.dispose();
+    email.dispose();
+    mobile.dispose();
+    phone.dispose();
+    ext.dispose();
+    fax.dispose();
+    website.dispose();
+    hours.dispose();
+    notes.dispose();
     super.dispose();
   }
 
-  Future<void> _load() async {
-    final doc = await FirebaseFirestore.instance
-        .collection('receivers')
-        .doc(widget.receiverId!)
-        .get();
-    if (!doc.exists) return;
-    setState(() {
-      _receiver = Receiver.fromDoc(doc);
-      _name.text = _receiver.name;
-      _addr1.text = _receiver.address.line1;
-      // address.line2 intentionally ignored/hidden
-      _city.text = _receiver.address.city;
-      _region.text = _receiver.address.region;
-      _postal.text = _receiver.address.postalCode;
-      _country.text = _receiver.address.country;
-      _email.text = _receiver.email;
-      _mobile.text = _receiver.mobilePhone;
-      _work.text = _receiver.workPhone;
-      _ext.text = _receiver.workExt;
-      _hours.text = _receiver.hours;
-      _notes.text = _receiver.notes;
-      _hoName.text = _receiver.headOffice.name;
-      _hoPhone.text = _receiver.headOffice.phone;
-      _hoExt.text = _receiver.headOffice.ext;
-      _hoEmail.text = _receiver.headOffice.email;
-      _contacts = [..._receiver.contacts];
-    });
-  }
+  InputDecoration _dec(String label) => InputDecoration(labelText: label);
 
-  void _popNextFrame(Map<String, dynamic> result) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final nav = Navigator.of(context, rootNavigator: true);
-      if (nav.canPop()) nav.pop(result);
-    });
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+
+    return Scaffold(
+      appBar: AppBar(
+        title:
+            Text(widget.receiverId == null ? 'New Receiver' : 'Edit Receiver'),
+        actions: [
+          if (widget.receiverId != null)
+            IconButton(
+              icon: const Icon(Icons.delete),
+              tooltip: 'Delete',
+              onPressed: _delete,
+            ),
+          const SizedBox(width: 8),
+        ],
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(controller: name, decoration: _dec('Name')),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(
+                  child: TextField(
+                      controller: legacyId, decoration: _dec('Legacy ID'))),
+              const SizedBox(width: 8),
+              Expanded(
+                  child: TextField(
+                      controller: legacyName, decoration: _dec('Legacy Name'))),
+            ]),
+            const SizedBox(height: 16),
+            const Text('Address'),
+            const SizedBox(height: 8),
+            TextField(controller: line1, decoration: _dec('Line 1')),
+            const SizedBox(height: 8),
+            TextField(controller: city, decoration: _dec('City')),
+            const SizedBox(height: 8),
+            TextField(controller: region, decoration: _dec('Province/State')),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(
+                  child: TextField(
+                      controller: postal, decoration: _dec('Postal/ZIP Code'))),
+              const SizedBox(width: 8),
+              Expanded(
+                  child: TextField(
+                      controller: country, decoration: _dec('Country'))),
+            ]),
+            const SizedBox(height: 16),
+            const Text('Contacts'),
+            const SizedBox(height: 8),
+            ..._contacts.asMap().entries.map((e) {
+              final pc = e.value;
+              return ListTile(
+                leading: const Icon(Icons.person),
+                title: Text(pc.name),
+                subtitle: Text(
+                    '${pc.position} • ${pc.email} • ${pc.phone} ${pc.ext}'),
+                trailing: IconButton(
+                  icon: const Icon(Icons.edit),
+                  onPressed: () =>
+                      _openContactDialog(index: e.key, existing: pc),
+                ),
+              );
+            }),
+            TextButton.icon(
+              onPressed: () => _openContactDialog(),
+              icon: const Icon(Icons.add),
+              label: const Text('Add Contact'),
+            ),
+            const SizedBox(height: 16),
+            TextField(controller: email, decoration: _dec('Main Email')),
+            const SizedBox(height: 8),
+            TextField(controller: mobile, decoration: _dec('Mobile Phone')),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(
+                  child:
+                      TextField(controller: phone, decoration: _dec('Phone'))),
+              const SizedBox(width: 8),
+              SizedBox(
+                  width: 120,
+                  child: TextField(controller: ext, decoration: _dec('Ext'))),
+            ]),
+            const SizedBox(height: 8),
+            TextField(controller: fax, decoration: _dec('Fax')),
+            const SizedBox(height: 8),
+            TextField(controller: website, decoration: _dec('Website')),
+            const SizedBox(height: 16),
+            TextField(
+              controller: hours,
+              decoration: _dec('Hours'),
+              minLines: 2,
+              maxLines: 4,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: notes,
+              decoration: _dec('Notes'),
+              minLines: 3,
+              maxLines: 6,
+            ),
+            const SizedBox(height: 16),
+            SwitchListTile(
+              title: const Text('Active'),
+              value: _isActive,
+              onChanged: (v) => setState(() => _isActive = v),
+            ),
+            const SizedBox(height: 24),
+            FilledButton(
+              onPressed: _save,
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _save() async {
-    if (!_formKey.currentState!.validate()) {
-      if (_name.text.trim().isEmpty) {
-        _nameFocus.requestFocus();
-        _scroll.animateTo(0,
-            duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Receiver name is required')));
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Fix highlighted fields')));
-      }
-      return;
-    }
-
-    final isNew = widget.receiverId == null;
-    setState(() => _saving = true);
-
-    // Build payload (no line 2)
-    final payload = Receiver(
-      id: widget.receiverId ?? '',
-      name: _name.text.trim(),
+    final id = widget.receiverId ?? _newId();
+    final receiver = Receiver(
+      id: id,
+      name: name.text.trim(),
+      legacyId: legacyId.text.trim(),
+      legacyName: legacyName.text.trim(),
       address: Address(
-        line1: _addr1.text.trim(),
-        line2: '', // removed from UI & payload
-        city: _city.text.trim(),
-        region: _region.text.trim(),
-        postalCode: _postal.text.trim(),
-        country: _country.text.trim().isEmpty ? 'CA' : _country.text.trim(),
+        line1: line1.text.trim(),
+        city: city.text.trim(),
+        region: region.text.trim(),
+        postalCode: postal.text.trim(),
+        country: country.text.trim(),
       ),
-      email: _email.text.trim(),
-      mobilePhone: _mobile.text.trim(),
-      workPhone: _work.text.trim(),
-      workExt: _ext.text.trim(),
-      hours: _hours.text.trim(),
-      notes: _notes.text.trim(),
-      headOffice: PersonContact(
-        name: _hoName.text.trim(),
-        phone: _hoPhone.text.trim(),
-        ext: _hoExt.text.trim(),
-        email: _hoEmail.text.trim(),
-      ),
+      email: email.text.trim(),
+      mobilePhone: mobile.text.trim(),
+      phone: phone.text.trim(),
+      ext: ext.text.trim(),
+      fax: fax.text.trim(),
+      website: website.text.trim(),
+      hours: hours.text.trim(),
+      notes: notes.text.trim(),
       contacts: _contacts,
+      isActive: _isActive,
     );
 
-    // Close immediately like Client
-    final result = {
-      'action': isNew ? 'created' : 'updated',
-      'name': payload.name
-    };
-    _popNextFrame(result);
-
-    // Finish write in background
-    () async {
-      try {
-        final ref = FirebaseFirestore.instance.collection('receivers');
-        if (isNew) {
-          await ref.add(payload.toMap());
-        } else {
-          await ref.doc(widget.receiverId!).update(payload.toMap());
-        }
-      } catch (_) {}
-    }();
+    try {
+      await FirebaseFirestore.instance
+          .collection('receivers')
+          .doc(id)
+          .set(receiver.toMap(), SetOptions(merge: true));
+      if (mounted) {
+        Navigator.pop(context, {
+          'action': widget.receiverId == null ? 'Added' : 'Updated',
+          'name': receiver.name
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      }
+    }
   }
 
-  Future<void> _confirmDelete() async {
-    if (widget.receiverId == null) return;
-    final name =
-        _name.text.trim().isEmpty ? 'this receiver' : _name.text.trim();
-    final ok = await showDialog<bool>(
+  Future<void> _delete() async {
+    final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete Receiver?'),
-        content: Text('Delete "$name"? This cannot be undone.'),
+        content: const Text('This cannot be undone.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -612,277 +658,23 @@ class _ReceiverEditScreenState extends State<ReceiverEditScreen> {
         ],
       ),
     );
-    if (ok != true) return;
+    if (confirm != true) return;
 
     try {
       await FirebaseFirestore.instance
           .collection('receivers')
-          .doc(widget.receiverId!)
+          .doc(widget.receiverId)
           .delete();
-      _popNextFrame({'action': 'deleted', 'name': name});
+      if (mounted) {
+        Navigator.pop(
+            context, {'action': 'Deleted', 'name': _original?.name ?? ''});
+      }
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+      }
     }
-  }
-
-  InputDecoration _dec(String label, [String? hint, Widget? suffix]) =>
-      InputDecoration(
-        labelText: label,
-        hintText: hint,
-        border: const OutlineInputBorder(),
-        suffixIcon: suffix,
-      );
-
-  @override
-  Widget build(BuildContext context) {
-    final canDelete = widget.receiverId != null;
-
-    return Scaffold(
-      appBar: AppBar(
-        title:
-            Text(widget.receiverId == null ? 'New Receiver' : 'Edit Receiver'),
-        actions: [
-          TextButton.icon(
-            onPressed: _saving ? null : _save,
-            icon: const Icon(Icons.save),
-            label: const Text('Save'),
-            style: TextButton.styleFrom(
-              foregroundColor: Theme.of(context).colorScheme.onPrimary,
-            ),
-          ),
-        ],
-      ),
-      body: AbsorbPointer(
-        absorbing: _saving,
-        child: Form(
-          key: _formKey,
-          autovalidateMode: AutovalidateMode.onUserInteraction,
-          child: SingleChildScrollView(
-            controller: _scroll,
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                // Name
-                TextFormField(
-                  controller: _name,
-                  focusNode: _nameFocus,
-                  decoration: _dec('Receiver Name *'),
-                  validator: (v) =>
-                      (v == null || v.trim().isEmpty) ? 'Required' : null,
-                ),
-                const SizedBox(height: 12),
-
-                // Address (no line 2)
-                _addrBlock(
-                    'Address', _addr1, _city, _region, _postal, _country),
-
-                const Divider(height: 24),
-
-                // Site contact
-                Row(children: [
-                  Expanded(
-                      child: TextFormField(
-                          controller: _email, decoration: _dec('Email'))),
-                  const SizedBox(width: 8),
-                  Expanded(
-                      child: TextFormField(
-                          controller: _mobile, decoration: _dec('Mobile'))),
-                ]),
-                const SizedBox(height: 8),
-                Row(children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _work,
-                      decoration: _dec(
-                        'Work Phone',
-                        null,
-                        IconButton(
-                          icon: const Icon(Icons.call),
-                          onPressed: () => _callNumber(context, _work.text),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 120,
-                    child: TextFormField(
-                        controller: _ext, decoration: _dec('Ext')),
-                  ),
-                ]),
-
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _hours,
-                  decoration:
-                      _dec('Hours of Operation (e.g., Mon-Fri 7:00–17:00)'),
-                ),
-                const SizedBox(height: 8),
-                TextFormField(
-                  controller: _notes,
-                  maxLines: 4,
-                  decoration: _dec('Notes / Special Instructions'),
-                ),
-
-                // Head Office
-                const Divider(height: 24),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text('Head Office (optional)',
-                      style: const TextStyle(fontWeight: FontWeight.w700)),
-                ),
-                const SizedBox(height: 8),
-                TextFormField(controller: _hoName, decoration: _dec('Name')),
-                const SizedBox(height: 8),
-                Row(children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _hoPhone,
-                      decoration: _dec(
-                        'Phone',
-                        null,
-                        IconButton(
-                          icon: const Icon(Icons.call),
-                          onPressed: () => _callNumber(context, _hoPhone.text),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 120,
-                    child: TextFormField(
-                        controller: _hoExt, decoration: _dec('Ext')),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: TextFormField(
-                        controller: _hoEmail, decoration: _dec('Email')),
-                  ),
-                ]),
-
-                // Contacts
-                const Divider(height: 24),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text('On-Site Receiver Contacts',
-                      style: const TextStyle(fontWeight: FontWeight.w700)),
-                ),
-                const SizedBox(height: 8),
-                for (int i = 0; i < _contacts.length; i++)
-                  Card(
-                    child: ListTile(
-                      leading: const Icon(Icons.person_outline),
-                      title: Text(
-                        _contacts[i].name.isEmpty
-                            ? 'Contact ${i + 1}'
-                            : _contacts[i].name,
-                      ),
-                      subtitle: Text(_oneLine(
-                          '${_contacts[i].position} • ${_contacts[i].phone} ext ${_contacts[i].ext} • ${_contacts[i].email}')),
-                      trailing: Wrap(
-                        spacing: 4,
-                        children: [
-                          IconButton(
-                            tooltip: 'Edit',
-                            icon: const Icon(Icons.edit),
-                            onPressed: () => _openContactDialog(
-                                index: i, existing: _contacts[i]),
-                          ),
-                          IconButton(
-                            tooltip: 'Delete',
-                            icon: const Icon(Icons.delete_outline),
-                            onPressed: () =>
-                                setState(() => _contacts.removeAt(i)),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton.icon(
-                    onPressed: () => _openContactDialog(),
-                    icon: const Icon(Icons.person_add_alt_1),
-                    label: const Text('Add Contact'),
-                  ),
-                ),
-
-                const SizedBox(height: 24),
-                FilledButton.icon(
-                  onPressed: _saving ? null : _save,
-                  icon: const Icon(Icons.save),
-                  label: const Text('Save Receiver'),
-                ),
-                if (canDelete) ...[
-                  const SizedBox(height: 24),
-                  const Divider(),
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text('Danger zone',
-                        style: TextStyle(
-                            color: Theme.of(context).colorScheme.error,
-                            fontWeight: FontWeight.w700)),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Theme.of(context).colorScheme.error,
-                      side: BorderSide(
-                          color: Theme.of(context).colorScheme.error),
-                    ),
-                    onPressed: _confirmDelete,
-                    icon: const Icon(Icons.delete_forever),
-                    label: const Text('Delete receiver'),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // Address block WITHOUT Line 2
-  Widget _addrBlock(
-    String title,
-    TextEditingController l1,
-    TextEditingController city,
-    TextEditingController region,
-    TextEditingController postal,
-    TextEditingController country,
-  ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
-        const SizedBox(height: 6),
-        TextField(controller: l1, decoration: _dec('Street Address')),
-        const SizedBox(height: 8),
-        Row(children: [
-          Expanded(
-              child: TextField(controller: city, decoration: _dec('City'))),
-          const SizedBox(width: 8),
-          Expanded(
-              child: TextField(
-                  controller: region, decoration: _dec('Province/State'))),
-        ]),
-        const SizedBox(height: 8),
-        Row(children: [
-          Expanded(
-              child: TextField(
-                  controller: postal, decoration: _dec('Postal/ZIP Code'))),
-          const SizedBox(width: 8),
-          Expanded(
-              child:
-                  TextField(controller: country, decoration: _dec('Country'))),
-        ]),
-      ],
-    );
   }
 
   Future<void> _openContactDialog({int? index, PersonContact? existing}) async {
@@ -951,7 +743,7 @@ class _ReceiverEditScreenState extends State<ReceiverEditScreen> {
       );
       setState(() {
         if (isEdit) {
-          _contacts[index!] = pc;
+          _contacts[index] = pc;
         } else {
           _contacts.add(pc);
         }

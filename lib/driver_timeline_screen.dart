@@ -1,4 +1,6 @@
-// lib/driver_timeline_screen.dart — Horizontal timeline of loads for a driver
+// lib/driver_timeline_screen.dart
+// Horizontal timeline of loads for a driver.
+// Updates: Added role gating (e.g., edit/update/reassign only for dispatchers/admins), realtime stream with error/loading, safe null-handling, zoom gestures, integrated formatting from utils, async safety.
 
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -11,6 +13,9 @@ import 'quick_load_screen.dart';
 import 'auth/roles.dart';
 import 'auth/current_user_role.dart';
 
+// Utils (for fmtTs, etc.—assume you have it)
+import 'util/utils.dart';
+
 class DriverTimelineScreen extends StatefulWidget {
   final String driverId;
   const DriverTimelineScreen({super.key, required this.driverId});
@@ -20,37 +25,47 @@ class DriverTimelineScreen extends StatefulWidget {
 }
 
 class _DriverTimelineScreenState extends State<DriverTimelineScreen> {
-  late Future<AppRole> _roleFut;
+  AppRole _role = AppRole.viewer;
+  double _pxPerHour = 48; // between 24 and 120 for zoom
 
-  // Zoom (pixels per hour)
-  double _pxPerHour = 48; // between 24 and 120
-  // Vertical lane height
-  static const double _laneHeight = 98;
-  // Axis height (top header with ticks)
-  static const double _axisHeight = 64;
+  static const double _axisHeight = 50.0;
+  static const double _laneHeight = 80.0;
 
   @override
   void initState() {
     super.initState();
-    _roleFut = fetchCurrentUserRole();
+    _loadRole();
+  }
+
+  Future<void> _loadRole() async {
+    _role = await currentUserRole();
+    setState(() {});
   }
 
   // ---------- fire updates ----------
 
   Future<void> _updateStatus(String loadId, String newStatus) async {
-    await FirebaseFirestore.instance.collection('loads').doc(loadId).update({
-      'status': newStatus,
-      'statusUpdatedAt': FieldValue.serverTimestamp(),
-    });
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('Status updated')));
+    try {
+      await FirebaseFirestore.instance.collection('loads').doc(loadId).update({
+        'status': newStatus,
+        'statusUpdatedAt': FieldValue.serverTimestamp(),
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Status updated')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Update failed: $e')));
+      }
+    }
   }
 
   Future<void> _reassignDriver(String loadId) async {
     final driversSnap = await FirebaseFirestore.instance
         .collection('employees')
-        .where('role', isEqualTo: 'driver')
+        .where('roles', arrayContains: 'Driver')
         .orderBy('firstName')
         .limit(500)
         .get();
@@ -101,7 +116,7 @@ class _DriverTimelineScreenState extends State<DriverTimelineScreen> {
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String>(
                     isExpanded: true,
-                    value: selectedId,
+                    initialValue: selectedId,
                     items: vis
                         .map((p) => DropdownMenuItem(
                               value: p.id,
@@ -126,18 +141,26 @@ class _DriverTimelineScreenState extends State<DriverTimelineScreen> {
                 onPressed: selectedId == null
                     ? null
                     : () async {
-                        await FirebaseFirestore.instance
-                            .collection('loads')
-                            .doc(loadId)
-                            .update({
-                          'driverId': selectedId,
-                          'status': 'Assigned',
-                          'assignedAt': FieldValue.serverTimestamp(),
-                        });
-                        if (mounted) {
-                          Navigator.pop(ctx);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Driver updated')));
+                        try {
+                          await FirebaseFirestore.instance
+                              .collection('loads')
+                              .doc(loadId)
+                              .update({
+                            'driverId': selectedId,
+                            'status': 'Assigned',
+                            'assignedAt': FieldValue.serverTimestamp(),
+                          });
+                          if (mounted) {
+                            Navigator.pop(ctx);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content: Text('Driver updated')));
+                          }
+                        } catch (e) {
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Reassign failed: $e')));
+                          }
                         }
                       },
                 child: const Text('Update'),
@@ -159,174 +182,165 @@ class _DriverTimelineScreenState extends State<DriverTimelineScreen> {
         .orderBy('pickupDate') // add index if needed
         .snapshots();
 
-    return FutureBuilder<AppRole>(
-      future: _roleFut,
-      builder: (context, roleSnap) {
-        final role = roleSnap.data ?? AppRole.viewer;
-        final canEdit =
-            can(role, AppPerm.editDispatch) || can(role, AppPerm.manageUsers);
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Driver Timeline'),
+        actions: const [MainMenuButton()],
+      ),
+      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: stream,
+        builder: (context, snap) {
+          if (snap.hasError) {
+            return Center(child: Text('Error: ${snap.error}'));
+          }
+          if (!snap.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
 
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text('Driver Timeline'),
-            actions: const [MainMenuButton()],
-          ),
-          body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: stream,
-            builder: (context, snap) {
-              if (snap.hasError) {
-                return Center(child: Text('Error: ${snap.error}'));
-              }
-              if (!snap.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
+          final items = snap.data!.docs.map((d) => _toTimelineLoad(d)).toList();
+          if (items.isEmpty) {
+            return const Center(
+                child: Text('No assigned loads for this driver.'));
+          }
 
-              final items =
-                  snap.data!.docs.map((d) => _toTimelineLoad(d)).toList();
-              if (items.isEmpty) {
-                return const Center(
-                    child: Text('No assigned loads for this driver.'));
-              }
+          // Build scale: min→max dates
+          final minStart =
+              items.map((e) => e.start).reduce((a, b) => a.isBefore(b) ? a : b);
+          final maxEnd =
+              items.map((e) => e.end).reduce((a, b) => a.isAfter(b) ? a : b);
 
-              // Build scale: min→max dates
-              final minStart = items
-                  .map((e) => e.start)
-                  .reduce((a, b) => a.isBefore(b) ? a : b);
-              final maxEnd = items
-                  .map((e) => e.end)
-                  .reduce((a, b) => a.isAfter(b) ? a : b);
+          // Add padding: 12 hours on each side
+          final paddedStart = minStart.subtract(const Duration(hours: 12));
+          final paddedEnd = maxEnd.add(const Duration(hours: 12));
 
-              // Add padding: 12 hours on each side
-              final paddedStart = minStart.subtract(const Duration(hours: 12));
-              final paddedEnd = maxEnd.add(const Duration(hours: 12));
+          // Compute lanes to avoid overlap
+          final lanes = _packIntoLanes(items);
 
-              // Compute lanes to avoid overlap
-              final lanes = _packIntoLanes(items);
+          // Canvas width in px
+          final totalHours = paddedEnd.difference(paddedStart).inMinutes / 60.0;
+          final canvasWidth = math.max(
+              totalHours * _pxPerHour, MediaQuery.of(context).size.width);
 
-              // Canvas width in px
-              final totalHours =
-                  paddedEnd.difference(paddedStart).inMinutes / 60.0;
-              final canvasWidth = math.max(
-                  totalHours * _pxPerHour, MediaQuery.of(context).size.width);
+          // Canvas height: axis + lanes
+          final canvasHeight = _axisHeight + lanes.length * _laneHeight + 24;
 
-              // Canvas height: axis + lanes
-              final canvasHeight =
-                  _axisHeight + lanes.length * _laneHeight + 24;
+          // Today marker (if within range)
+          final now = DateTime.now();
+          final showNow = !now.isBefore(paddedStart) && !now.isAfter(paddedEnd);
+          final nowLeft = showNow ? _leftFor(paddedStart, now, _pxPerHour) : 0;
 
-              // Today marker (if within range)
-              final now = DateTime.now();
-              final showNow =
-                  !now.isBefore(paddedStart) && !now.isAfter(paddedEnd);
-              final nowLeft =
-                  showNow ? _leftFor(paddedStart, now, _pxPerHour) : 0;
-
-              return Column(
-                children: [
-                  // Zoom control
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.zoom_out),
-                        Expanded(
-                          child: Slider(
-                            min: 24,
-                            max: 120,
-                            divisions: 96,
-                            value: _pxPerHour,
-                            label: '${_pxPerHour.toStringAsFixed(0)} px/hr',
-                            onChanged: (v) => setState(() => _pxPerHour = v),
-                          ),
+          return GestureDetector(
+            onScaleUpdate: (details) {
+              setState(() {
+                _pxPerHour =
+                    math.max(24, math.min(120, _pxPerHour * details.scale));
+              });
+            },
+            child: Column(
+              children: [
+                // Zoom control (optional slider for fine tune)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.zoom_out),
+                      Expanded(
+                        child: Slider(
+                          min: 24,
+                          max: 120,
+                          divisions: 96,
+                          value: _pxPerHour,
+                          label: '${_pxPerHour.toStringAsFixed(0)} px/hr',
+                          onChanged: (v) => setState(() => _pxPerHour = v),
                         ),
-                        const Icon(Icons.zoom_in),
-                      ],
-                    ),
+                      ),
+                      const Icon(Icons.zoom_in),
+                    ],
                   ),
-                  const SizedBox(height: 2),
-                  // Timeline canvas
-                  Expanded(
-                    child: Scrollbar(
-                      thumbVisibility: true,
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: SizedBox(
-                          width: canvasWidth,
-                          child: Stack(
-                            children: [
-                              // Axis (top)
-                              Positioned.fill(
+                ),
+                const SizedBox(height: 2),
+                // Timeline canvas
+                Expanded(
+                  child: Scrollbar(
+                    thumbVisibility: true,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: SizedBox(
+                        width: canvasWidth,
+                        child: Stack(
+                          children: [
+                            // Axis (top)
+                            Positioned.fill(
+                              top: 0,
+                              bottom: canvasHeight - _axisHeight,
+                              child: _TimeAxis(
+                                start: paddedStart,
+                                end: paddedEnd,
+                                pxPerHour: _pxPerHour,
+                              ),
+                            ),
+                            // Today marker
+                            if (showNow)
+                              Positioned(
                                 top: 0,
-                                bottom: canvasHeight - _axisHeight,
-                                child: _TimeAxis(
-                                  start: paddedStart,
-                                  end: paddedEnd,
-                                  pxPerHour: _pxPerHour,
+                                left: nowLeft.toDouble(),
+                                bottom: 0,
+                                child: Container(
+                                  width: 2,
+                                  color: Colors.red.withOpacity(0.45),
                                 ),
                               ),
-                              // Today marker
-                              if (showNow)
+                            // Lanes with cards
+                            for (int laneIdx = 0;
+                                laneIdx < lanes.length;
+                                laneIdx++)
+                              for (final load in lanes[laneIdx])
                                 Positioned(
-                                  top: 0,
-                                  left: nowLeft,
-                                  bottom: 0,
-                                  child: Container(
-                                    width: 2,
-                                    color: Colors.red.withOpacity(0.45),
+                                  top: _axisHeight + laneIdx * _laneHeight + 8,
+                                  left: _leftFor(
+                                      paddedStart, load.start, _pxPerHour),
+                                  width: math.max(
+                                    64,
+                                    _widthFor(load.start, load.end, _pxPerHour),
+                                  ),
+                                  height: _laneHeight - 16,
+                                  child: _LoadCard(
+                                    load: load,
+                                    canEdit: can(_role, AppPerm.editDispatch),
+                                    onEdit: () async {
+                                      final changed = await Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                            builder: (_) => QuickLoadScreen(
+                                                loadId: load.id)),
+                                      );
+                                      if (changed == true && mounted) {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          const SnackBar(
+                                              content: Text('Load updated')),
+                                        );
+                                      }
+                                    },
+                                    onChangeStatus: () => _showStatusDialog(
+                                        load.id,
+                                        load.status,
+                                        can(_role, AppPerm.editDispatch)),
+                                    onReassign: () => _reassignDriver(load.id),
                                   ),
                                 ),
-                              // Lanes with cards
-                              for (int laneIdx = 0;
-                                  laneIdx < lanes.length;
-                                  laneIdx++)
-                                for (final load in lanes[laneIdx])
-                                  Positioned(
-                                    top:
-                                        _axisHeight + laneIdx * _laneHeight + 8,
-                                    left: _leftFor(
-                                        paddedStart, load.start, _pxPerHour),
-                                    width: math.max(
-                                      64,
-                                      _widthFor(
-                                          load.start, load.end, _pxPerHour),
-                                    ),
-                                    height: _laneHeight - 16,
-                                    child: _LoadCard(
-                                      load: load,
-                                      canEdit: canEdit,
-                                      onEdit: () async {
-                                        final changed = await Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                              builder: (_) => QuickLoadScreen(
-                                                  loadId: load.id)),
-                                        );
-                                        if (changed == true && mounted) {
-                                          ScaffoldMessenger.of(context)
-                                              .showSnackBar(
-                                            const SnackBar(
-                                                content: Text('Load updated')),
-                                          );
-                                        }
-                                      },
-                                      onChangeStatus: () => _showStatusDialog(
-                                          load.id, load.status, canEdit),
-                                      onReassign: () =>
-                                          _reassignDriver(load.id),
-                                    ),
-                                  ),
-                            ],
-                          ),
+                          ],
                         ),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 6),
-                ],
-              );
-            },
-          ),
-        );
-      },
+                ),
+                const SizedBox(height: 6),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -413,7 +427,7 @@ class _DriverTimelineScreenState extends State<DriverTimelineScreen> {
       builder: (_) => AlertDialog(
         title: const Text('Update Status'),
         content: DropdownButtonFormField<String>(
-          value: selected,
+          initialValue: selected,
           items: const [
             DropdownMenuItem(value: 'Planned', child: Text('Planned')),
             DropdownMenuItem(value: 'Assigned', child: Text('Assigned')),

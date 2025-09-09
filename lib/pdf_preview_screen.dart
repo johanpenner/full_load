@@ -86,7 +86,7 @@ class _PDFPreviewScreenState extends State<PDFPreviewScreen> {
       final sink = cached.openWrite();
       int received = 0;
 
-      await resp.stream.listen(
+      resp.stream.listen(
         (chunk) {
           sink.add(chunk);
           received += chunk.length;

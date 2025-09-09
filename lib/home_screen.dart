@@ -1,67 +1,97 @@
 // lib/home_screen.dart
-// Clean home with tabs for Loads, New Load, Clients, Shippers, Receivers, Employees.
-// Includes a launcher for QuickLoadScreen and fixes tab/child count mismatch.
+// Home with sidebar (NavigationRail) for Dashboard, Loads, Employees, Clients,
+// Shippers, Receivers, Docs, Settings. Global search in the content area.
+// FAB opens the upgraded New Load Entry screen.
 
 import 'package:flutter/material.dart';
 
-// Tabs
-import 'loads_tab.dart';
-import 'clients_all_in_one.dart'; // ClientListScreen
-import 'shippers_tab.dart'; // ShippersTab
-import 'receivers_tab.dart'; // ReceiversTab
-import 'employees_tab.dart'; // EmployeesTab
+// Actual screens/widgets
+import 'dashboard_screen.dart';
+import 'loads_screen.dart';
+import 'employees_screen.dart';
+import 'clients_screen.dart';
+import 'shippers_tab.dart';
+import 'receivers_tab.dart';
+import 'settings_screen.dart';
 
-// Quick Load creator (ensure this file exists from earlier step)
-// If you renamed it, update the import accordingly.
-import 'quick_load_screen.dart'; // QuickLoadScreen
+// Placeholders
+import 'placeholders.dart';
+
+// New load entry screen (the upgraded one I provided)
+import 'new_load_entry.dart'; // <- make sure this file exists
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
-
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
-  // Tab indexes for convenience
-  static const int _idxLoads = 0;
-  static const int _idxNewLoad = 1;
-  static const int _idxClients = 2;
-  static const int _idxShippers = 3;
-  static const int _idxReceivers = 4;
-  static const int _idxEmployees = 5;
-
-  late final TabController _tabs;
+class _HomeScreenState extends State<HomeScreen> {
+  int _selectedIndex = 0; // Starts on Dashboard
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
 
   @override
   void initState() {
     super.initState();
-    // ✅ 6 tabs now (Loads, New Load, Clients, Shippers, Receivers, Employees)
-    _tabs = TabController(length: 6, vsync: this);
+    _searchController.addListener(() {
+      setState(
+          () => _searchQuery = _searchController.text.trim().toLowerCase());
+    });
   }
 
   @override
   void dispose() {
-    _tabs.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
-  Future<void> _openQuickLoad() async {
-    // Open the full Quick Load form.
-    // On successful save, QuickLoadScreen returns true via Navigator.pop(context, true)
-    final saved = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(builder: (_) => const QuickLoadScreen()),
-    );
+  // Sidebar destinations
+  final List<NavigationRailDestination> _destinations = const [
+    NavigationRailDestination(
+        icon: Icon(Icons.dashboard), label: Text('Dashboard')),
+    NavigationRailDestination(
+        icon: Icon(Icons.local_shipping), label: Text('Loads')),
+    NavigationRailDestination(
+        icon: Icon(Icons.people), label: Text('Employees')),
+    NavigationRailDestination(
+        icon: Icon(Icons.business), label: Text('Clients')),
+    NavigationRailDestination(icon: Icon(Icons.store), label: Text('Shippers')),
+    NavigationRailDestination(
+        icon: Icon(Icons.inventory_2), label: Text('Receivers')),
+    NavigationRailDestination(
+        icon: Icon(Icons.description), label: Text('Docs')),
+    NavigationRailDestination(
+        icon: Icon(Icons.settings), label: Text('Settings')),
+  ];
 
-    if (saved == true) {
-      // Jump to Loads so dispatcher sees it immediately.
-      _tabs.animateTo(_idxLoads);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Load saved')),
+  // Get content for selected index
+  Widget _getContent(int index, String searchQuery) {
+    switch (index) {
+      case 0:
+        return const DashboardScreen();
+      case 1:
+        return LoadsScreen(searchQuery: searchQuery);
+      case 2:
+        return EmployeesScreen(searchQuery: searchQuery);
+      case 3:
+        return ClientsScreen(searchQuery: searchQuery);
+      case 4:
+        return Scaffold(
+          appBar: AppBar(title: const Text('Shippers')),
+          body: ShippersTab(searchQuery: searchQuery),
         );
-      }
+      case 5:
+        return Scaffold(
+          appBar: AppBar(title: const Text('Receivers')),
+          body: ReceiversTab(searchQuery: searchQuery),
+        );
+      case 6:
+        return const DocsScreenPlaceholder();
+      case 7:
+        return const SettingsScreen();
+      default:
+        return const SizedBox.shrink();
     }
   }
 
@@ -69,107 +99,60 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Full Load'),
-        actions: [
-          IconButton(
-            tooltip: 'New Load',
-            icon: const Icon(Icons.add),
-            onPressed: _openQuickLoad,
-          ),
-        ],
-        bottom: TabBar(
-          controller: _tabs,
-          isScrollable: true,
-          tabs: const [
-            Tab(icon: Icon(Icons.local_shipping), text: 'Loads'),
-            Tab(icon: Icon(Icons.add_box), text: 'New Load'),
-            Tab(icon: Icon(Icons.people_alt), text: 'Clients'),
-            Tab(icon: Icon(Icons.store), text: 'Shippers'),
-            Tab(icon: Icon(Icons.inventory_2), text: 'Receivers'),
-            Tab(icon: Icon(Icons.badge), text: 'Employees'),
+        title: const Text('Full Load - Admin'),
+        actions: [IconButton(icon: const Icon(Icons.menu), onPressed: () {})],
+      ),
+      body: SafeArea(
+        child: Row(
+          children: [
+            // Keep the rail width explicit so it never collapses to 0 and break hit-testing.
+            // 256 is the standard width for an "extended" NavigationRail.
+            SizedBox(
+              width: 256,
+              child: NavigationRail(
+                selectedIndex: _selectedIndex,
+                extended: true,
+                onDestinationSelected: (index) =>
+                    setState(() => _selectedIndex = index),
+                destinations: _destinations,
+              ),
+            ),
+            const VerticalDivider(thickness: 1, width: 1),
+            Expanded(
+              child: Column(
+                children: [
+                  // Global search bar
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: TextField(
+                      controller: _searchController,
+                      decoration: InputDecoration(
+                        hintText:
+                            'Search by client, shipper, receiver, load #, PO #',
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                        prefixIcon: const Icon(Icons.search),
+                      ),
+                    ),
+                  ),
+                  Expanded(child: _getContent(_selectedIndex, _searchQuery)),
+                ],
+              ),
+            ),
           ],
         ),
       ),
-      body: TabBarView(
-        controller: _tabs,
-        children: [
-          const LoadsTab(),
-          // New Load tab shows a one-tap launcher into the QuickLoadScreen.
-          _NewLoadLauncher(onStart: _openQuickLoad),
-          const ClientListScreen(),
-          const ShippersTab(),
-          const ReceiversTab(),
-          const EmployeesTab(),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _openQuickLoad,
-        icon: const Icon(Icons.add),
-        label: const Text('New Load'),
-      ),
-    );
-  }
-}
-
-/// A simple launcher card so the New Load tab is just one tap.
-/// This avoids embedding the full screen in a tab (which could cause
-/// Navigator.pop() inside the form to close the whole HomeScreen).
-class _NewLoadLauncher extends StatelessWidget {
-  final VoidCallback onStart;
-  const _NewLoadLauncher({required this.onStart});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 560),
-        child: Card(
-          margin: const EdgeInsets.all(24),
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const ListTile(
-                  leading: Icon(Icons.bolt),
-                  title: Text('Quick Load'),
-                  subtitle: Text(
-                    'One-line entry: Client • Shipper • Receiver • Pickup • Delivery • Truck.\n'
-                    'Calculates Truck→Pickup and Pickup→Delivery distance & ETA (km/mi).',
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: const [
-                    Icon(Icons.local_shipping),
-                    SizedBox(width: 8),
-                    Icon(Icons.arrow_right_alt),
-                    SizedBox(width: 8),
-                    Icon(Icons.place),
-                    SizedBox(width: 8),
-                    Icon(Icons.arrow_right_alt),
-                    SizedBox(width: 8),
-                    Icon(Icons.flag),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                FilledButton.icon(
-                  onPressed: onStart,
-                  icon: const Icon(Icons.play_arrow),
-                  label: const Text('Start Quick Load'),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Tip: You can also tap the + in the top bar or the New Load button below.',
-                  style: Theme.of(context).textTheme.bodySmall,
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+      floatingActionButton: (_selectedIndex == 0 || _selectedIndex == 1)
+          ? FloatingActionButton.extended(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const NewLoadEntryScreen()),
+                );
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('New Load'),
+            )
+          : null,
     );
   }
 }

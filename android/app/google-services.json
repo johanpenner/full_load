@@ -7,6 +7,25 @@
   "client": [
     {
       "client_info": {
+        "mobilesdk_app_id": "1:1081293548287:android:dbb401da5cdd95f2823aca",
+        "android_client_info": {
+          "package_name": "com.elginroth.fullload"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA0aFYnRb8n6YXNVAwwdLlVVKWnKKzYg2c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
         "mobilesdk_app_id": "1:1081293548287:android:c02893f6f67eb806823aca",
         "android_client_info": {
           "package_name": "com.example.johnny_app"

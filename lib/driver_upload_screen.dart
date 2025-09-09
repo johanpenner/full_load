@@ -2,6 +2,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:full_load/auth/current_user_role.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -16,7 +17,6 @@ import 'widgets/main_menu_button.dart';
 
 // Roles
 import 'auth/roles.dart';
-import 'auth/current_user_role.dart';
 
 class DriverUploadScreen extends StatefulWidget {
   const DriverUploadScreen({super.key});
@@ -49,7 +49,7 @@ class _DriverUploadScreenState extends State<DriverUploadScreen> {
   @override
   void initState() {
     super.initState();
-    _roleFut = fetchCurrentUserRole();
+    _roleFut = currentUserRole();
     _search.addListener(() {
       setState(() => _q = _search.text.trim().toLowerCase());
     });
@@ -182,108 +182,132 @@ class _DriverUploadScreenState extends State<DriverUploadScreen> {
                     ),
                   ),
 
-                // LOAD FILTER + TYPE + LOAD selection row
-                Row(
-                  children: [
-                    // Search
-                    Expanded(
-                      flex: 2,
-                      child: TextField(
-                        controller: _search,
-                        decoration: const InputDecoration(
-                          labelText: 'Filter loads',
-                          prefixIcon: Icon(Icons.search),
-                          isDense: true,
-                          border: OutlineInputBorder(),
-                        ),
-                        enabled: !_loadingLoads,
+                // LOAD FILTER + TYPE + LOAD selection row (responsive; no overflow)
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final wide = constraints.maxWidth >= 1100;
+
+                    final filterField = TextField(
+                      controller: _search,
+                      decoration: const InputDecoration(
+                        labelText: 'Filter loads',
+                        prefixIcon: Icon(Icons.search),
+                        isDense: true,
+                        border: OutlineInputBorder(),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    // Doc type
-                    Expanded(
-                      flex: 2,
-                      child: DropdownButtonFormField<String>(
-                        value: _docType,
-                        decoration: const InputDecoration(
-                          labelText: 'Document Type',
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                        ),
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'POD',
-                            child: Text('POD (Proof of Delivery)'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'BOL',
-                            child: Text('BOL (Bill of Lading)'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'Receipt',
-                            child: Text('Receipt'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'Photo',
-                            child: Text('Photo'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'Other',
-                            child: Text('Other'),
-                          ),
-                        ],
-                        onChanged: readOnly
-                            ? null
-                            : (v) => setState(() => _docType = v ?? 'Other'),
+                      enabled: !_loadingLoads,
+                    );
+
+                    final docTypeDropdown = DropdownButtonFormField<String>(
+                      isExpanded: true, // prevent overflow with long labels
+                      initialValue: _docType,
+                      decoration: const InputDecoration(
+                        labelText: 'Document Type',
+                        border: OutlineInputBorder(),
+                        isDense: true,
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    // Load picker
-                    Expanded(
-                      flex: 5,
-                      child: _loadingLoads
-                          ? const Center(child: CircularProgressIndicator())
-                          : DropdownButtonFormField<String>(
-                              value: _selectedLoadId,
-                              decoration: const InputDecoration(
-                                labelText: 'Load',
-                                border: OutlineInputBorder(),
-                                isDense: true,
-                              ),
-                              items: _filteredLoads
-                                  .map(
-                                    (l) => DropdownMenuItem(
-                                      value: l.id,
-                                      child: Text(
-                                        '${l.label}  •  ${l.info}',
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'POD',
+                          child: Text('POD (Proof of Delivery)',
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                        DropdownMenuItem(
+                          value: 'BOL',
+                          child: Text('BOL (Bill of Lading)',
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                        DropdownMenuItem(
+                            value: 'Receipt', child: Text('Receipt')),
+                        DropdownMenuItem(value: 'Photo', child: Text('Photo')),
+                        DropdownMenuItem(value: 'Other', child: Text('Other')),
+                      ],
+                      onChanged: readOnly
+                          ? null
+                          : (v) => setState(() => _docType = v ?? 'Other'),
+                    );
+
+                    final bool selectedIsInFiltered = _selectedLoadId != null &&
+                        _filteredLoads.any((l) => l.id == _selectedLoadId);
+
+                    final loadField = _loadingLoads
+                        ? InputDecorator(
+                            decoration: const InputDecoration(
+                              labelText: 'Load',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                            child: const SizedBox(
+                              height: 24, // keep field height consistent
+                              child: Center(child: CircularProgressIndicator()),
+                            ),
+                          )
+                        : DropdownButtonFormField<String>(
+                            isExpanded: true, // prevent overflow
+                            initialValue:
+                                selectedIsInFiltered ? _selectedLoadId : null,
+                            decoration: const InputDecoration(
+                              labelText: 'Load',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                            items: _filteredLoads
+                                .map(
+                                  (l) => DropdownMenuItem(
+                                    value: l.id,
+                                    child: Text(
+                                      '${l.label}  •  ${l.info}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
                                     ),
-                                  )
-                                  .toList(),
-                              onChanged: readOnly
-                                  ? null
-                                  : (v) {
-                                      final picked = _visibleLoads.firstWhere(
-                                        (x) => x.id == v,
-                                        orElse: () => _LoadItem(
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: readOnly
+                                ? null
+                                : (v) {
+                                    final picked = _visibleLoads.firstWhere(
+                                      (x) => x.id == v,
+                                      orElse: () => _LoadItem(
                                           id: v ?? '',
                                           label: v ?? '',
-                                          info: '',
-                                        ),
-                                      );
-                                      setState(() {
-                                        _selectedLoadId = v;
-                                        _selectedLoadLabel =
-                                            picked.label.isEmpty
-                                                ? v
-                                                : picked.label;
-                                      });
-                                    },
-                            ),
-                    ),
-                  ],
+                                          info: ''),
+                                    );
+                                    setState(() {
+                                      _selectedLoadId = v;
+                                      _selectedLoadLabel = picked.label.isEmpty
+                                          ? v
+                                          : picked.label;
+                                    });
+                                  },
+                          );
+
+                    if (wide) {
+                      // One line on wide screens
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(flex: 3, child: filterField),
+                          const SizedBox(width: 12),
+                          Expanded(flex: 2, child: docTypeDropdown),
+                          const SizedBox(width: 12),
+                          Expanded(flex: 4, child: loadField),
+                        ],
+                      );
+                    } else {
+                      // Stack on narrow screens
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          filterField,
+                          const SizedBox(height: 12),
+                          docTypeDropdown,
+                          const SizedBox(height: 12),
+                          loadField,
+                        ],
+                      );
+                    }
+                  },
                 ),
 
                 const SizedBox(height: 10),
@@ -520,7 +544,6 @@ class _DriverUploadScreenState extends State<DriverUploadScreen> {
     if (!mounted) return;
     setState(() => _uploading = false);
 
-    // No const here since message is runtime
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
           content:

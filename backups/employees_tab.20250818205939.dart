@@ -81,10 +81,12 @@ class _EmployeesTabState extends State<EmployeesTab> {
               child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                 stream: _employeesStream(),
                 builder: (ctx, snap) {
-                  if (snap.hasError)
+                  if (snap.hasError) {
                     return Center(child: Text('Error: ${snap.error}'));
-                  if (!snap.hasData)
+                  }
+                  if (!snap.hasData) {
                     return const Center(child: CircularProgressIndicator());
+                  }
 
                   final all = snap.data!.docs;
                   final filtered = _applyFilters(all);
@@ -338,8 +340,9 @@ class _EmployeesTabState extends State<EmployeesTab> {
   String _initials(String name) {
     final parts = name.trim().split(RegExp(r'\s+'));
     if (parts.isEmpty) return '?';
-    if (parts.length == 1)
+    if (parts.length == 1) {
       return parts.first.isEmpty ? '?' : parts.first[0].toUpperCase();
+    }
     return (parts.first.isNotEmpty ? parts.first[0].toUpperCase() : '') +
         (parts.last.isNotEmpty ? parts.last[0].toUpperCase() : '');
   }
@@ -611,7 +614,7 @@ class _EmployeesTabState extends State<EmployeesTab> {
 
       final file = io.File(path);
       await file.parent.create(recursive: true);
-      await file.writeAsBytes(bytes!, flush: true);
+      await file.writeAsBytes(bytes, flush: true);
 
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -801,12 +804,14 @@ class _EmployeesTabState extends State<EmployeesTab> {
                   child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                     stream: q.snapshots(),
                     builder: (c, snap) {
-                      if (!snap.hasData)
+                      if (!snap.hasData) {
                         return const Center(child: CircularProgressIndicator());
+                      }
                       final docs = snap.data!.docs;
-                      if (docs.isEmpty)
+                      if (docs.isEmpty) {
                         return const Center(
                             child: Text('No time off entries yet.'));
+                      }
                       return ListView.separated(
                         itemCount: docs.length,
                         separatorBuilder: (_, __) => const Divider(height: 1),
